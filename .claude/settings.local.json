@@ -12,7 +12,16 @@
       "Bash(git init:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(git config:*)"
+      "Bash(git config:*)",
+      "Bash(railway init:*)",
+      "Bash(railway list:*)",
+      "Bash(railway --help)",
+      "Bash(railway up:*)",
+      "Bash(railway status:*)",
+      "Bash(railway domain:*)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" https://chess-app-production-7dc9.up.railway.app)",
+      "Bash(railway logs:*)",
+      "Bash(railway service:*)"
     ]
   }
 }
