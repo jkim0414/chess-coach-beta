@@ -438,19 +438,76 @@ function describeRookMove(chess, afterGame, result) {
   return `Activates the rook to ${to}`;
 }
 
-// Build the follow-up hint from the PV line
-function getFollowUpHint(chess, pvLine, mainMoveResult) {
+// Material balance from one side's perspective
+function getMaterialBalance(game, color) {
+  const vals = { p: 1, n: 3, b: 3, r: 5, q: 9 };
+  let score = 0;
+  for (const row of game.board()) {
+    for (const sq of row) {
+      if (sq && sq.type !== 'k') {
+        score += sq.color === color ? vals[sq.type] : -vals[sq.type];
+      }
+    }
+  }
+  return score;
+}
+
+// Build a natural-language "idea line" from the Stockfish PV
+// Format: "If [their response], [our continuation] — [outcome]"
+function buildIdeaLine(chess, pvLine) {
   if (!pvLine || pvLine.length < 3) return null;
+
   const tempGame = new Chess(chess.fen());
-  try {
-    const uci0 = pvLine[0];
-    tempGame.move({ from:uci0.slice(0,2), to:uci0.slice(2,4), promotion:uci0[4]||'q' });
-    const uci1 = pvLine[1];
-    tempGame.move({ from:uci1.slice(0,2), to:uci1.slice(2,4), promotion:uci1[4]||'q' });
-    const uci2 = pvLine[2];
-    const r = tempGame.move({ from:uci2.slice(0,2), to:uci2.slice(2,4), promotion:uci2[4]||'q' });
-    if (r) return `The plan continues with ${r.san}`;
-  } catch { /* ignore */ }
+  const sanMoves = [];
+
+  for (const uci of pvLine.slice(0, 7)) {
+    try {
+      const r = tempGame.move({
+        from: uci.slice(0, 2),
+        to: uci.slice(2, 4),
+        ...(uci[4] ? { promotion: uci[4] } : {}),
+      });
+      if (!r) break;
+      sanMoves.push(r.san);
+    } catch { break; }
+  }
+
+  // Need: [our move, their response, our reply]
+  if (sanMoves.length < 3) return null;
+
+  const playerColor = chess.turn();
+  const matBefore = getMaterialBalance(chess, playerColor);
+  const matAfter  = getMaterialBalance(tempGame, playerColor);
+  const gain = matAfter - matBefore;
+
+  let outcome = null;
+  if (tempGame.isCheckmate()) {
+    outcome = 'checkmate';
+  } else if (tempGame.isCheck()) {
+    if (gain >= 3) outcome = 'winning a piece with check';
+    else if (gain >= 1) outcome = 'winning a pawn with check';
+  } else if (gain >= 9) {
+    outcome = 'winning the queen';
+  } else if (gain >= 5) {
+    outcome = 'winning the exchange';
+  } else if (gain >= 3) {
+    outcome = 'winning a piece';
+  } else if (gain >= 1) {
+    outcome = 'winning a pawn';
+  } else if (gain <= -4) {
+    outcome = 'sacrificing material for the initiative';
+  }
+
+  const theirResponse = sanMoves[1];
+  const continuation  = sanMoves.slice(2).join(' ');
+
+  if (outcome) {
+    return `If ${theirResponse}, ${continuation} — ${outcome}`;
+  }
+  // Only show longer lines without a clear outcome (avoids noise for quiet moves)
+  if (sanMoves.length >= 5) {
+    return `If ${theirResponse}, ${continuation}`;
+  }
   return null;
 }
 
@@ -563,6 +620,12 @@ function getMoveExplanation(chess, moveObj, score, pvLine, multiPvIndex, sanHist
     }
   }
 
+  // ── Idea line from PV ────────────────────────────────────────────────────
+  if (pvLine) {
+    const idea = buildIdeaLine(chess, pvLine);
+    if (idea) parts.push(idea);
+  }
+
   // ── Score context ─────────────────────────────────────────────────────────
   if (score) {
     if (score.startsWith('mate')) {
@@ -581,12 +644,6 @@ function getMoveExplanation(chess, moveObj, score, pvLine, multiPvIndex, sanHist
       else if (adj < -200) parts.push('Risky — this allows the opponent a large advantage');
       else if (adj < -80) parts.push('Dubious — the opponent gets a meaningful edge after this');
     }
-  }
-
-  // ── Follow-up hint from PV ────────────────────────────────────────────────
-  if (multiPvIndex === 0 && pvLine && pvLine.length >= 3) {
-    const hint = getFollowUpHint(chess, pvLine, result);
-    if (hint) parts.push(hint);
   }
 
   // ── Fallback ──────────────────────────────────────────────────────────────

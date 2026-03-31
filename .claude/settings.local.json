@@ -21,7 +21,8 @@
       "Bash(railway domain:*)",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\" https://chess-app-production-7dc9.up.railway.app)",
       "Bash(railway logs:*)",
-      "Bash(railway service:*)"
+      "Bash(railway service:*)",
+      "Bash(curl -sv https://chess-app-production-7dc9.up.railway.app)"
     ]
   }
 }
