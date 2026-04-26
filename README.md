@@ -1,16 +1,31 @@
-# React + Vite
+# Chess Coach
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A browser-based chess coaching app. Play against Stockfish at adjustable skill levels, then get plain-English explanations of the top candidate moves in any position — including tactical patterns (forks, pins, discovered attacks, threats), opening identification, and forcing-continuation idea lines.
 
-Currently, two official plugins are available:
+Live: https://chess-coach-beta.vercel.app
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## How it works
 
-## React Compiler
+- **Engine**: [Stockfish 18](https://stockfishchess.org/) compiled to WASM, running in a Web Worker so the UI stays responsive.
+- **Analysis**: MultiPV evaluation surfaces the top candidate moves; each is annotated with the resulting tactical motifs and a short forcing line.
+- **Game logic**: [chess.js](https://github.com/jhlywa/chess.js) for move validation, FEN/PGN, and game-state tracking.
+- **UI**: [react-chessboard](https://github.com/Clariity/react-chessboard) on top of React 19.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+The app is fully client-side — no server, no backend, no analysis API calls. Everything runs in your browser.
 
-## Expanding the ESLint configuration
+## Local development
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+```bash
+npm install
+npm run dev      # vite dev server
+npm run build    # produces dist/
+npm run preview  # preview the production build
+```
+
+Node 18+ required.
+
+## Deployment
+
+Deployed as a static site on Vercel. The `vercel.json` sets `Cross-Origin-Opener-Policy: same-origin` (required for the Stockfish Web Worker) and points the build at `dist/`.
+
+The legacy `server.js` (Express) was used for the prior Railway deploy and is no longer needed for Vercel — kept for reference.
