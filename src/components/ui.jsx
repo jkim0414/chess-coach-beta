@@ -34,9 +34,16 @@ export function GradeMark({ grade }) {
 /** Two-column move list. `showGrade(ply, i)` decides whether a ply's grade is visible. */
 export function MoveList({ plies, startFen, current, onSelect, showGrade = () => true }) {
   const ref = useRef(null);
+  // Keep the current move visible by scrolling the list itself. (scrollIntoView would
+  // also scroll the whole page down to the list after every move.)
   useEffect(() => {
-    const el = ref.current?.querySelector('.is-current') || ref.current?.lastElementChild;
-    el?.scrollIntoView?.({ block: 'nearest' });
+    const box = ref.current;
+    const el = box?.querySelector('.is-current') || box?.lastElementChild;
+    if (!box || !el) return;
+    const top = el.offsetTop;
+    const bottom = top + el.offsetHeight;
+    if (top < box.scrollTop) box.scrollTop = top;
+    else if (bottom > box.scrollTop + box.clientHeight) box.scrollTop = bottom - box.clientHeight;
   }, [plies.length, current]);
   const startBlack = startFen ? startFen.split(' ')[1] === 'b' : false;
   const startNum = startFen ? parseInt(startFen.split(' ')[5] || '1', 10) : 1;

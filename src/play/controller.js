@@ -80,6 +80,7 @@ export class GameController {
     this.listeners = new Set();
     this.gen = 0;
     this.chess = new Chess();
+    this.threatsAsked = new Set();
     this.t = null;
     this.s = initialState();
   }
@@ -121,6 +122,7 @@ export class GameController {
     this.gen++;
     this.engine.cancel();
     this.chess = new Chess(g.config.fen || undefined);
+    this.threatsAsked = new Set();
     for (const p of g.plies) {
       try { this.chess.move(uciToObj(p.uci)); } catch { return false; }
     }
@@ -156,6 +158,7 @@ export class GameController {
     this.engine.cancel();
     this.engine.newGame();
     this.chess = new Chess(config.fen || undefined);
+    this.threatsAsked = new Set();
     const userColor = config.userColor === 'random' ? (this.rng() < 0.5 ? 'w' : 'b') : config.userColor === 'black' || config.userColor === 'b' ? 'b' : 'w';
     const persona = resolvePersona(config.personaId, config.custom);
     this.chess.setHeader('White', userColor === 'w' ? 'You' : persona.name);
@@ -171,7 +174,7 @@ export class GameController {
       : config.coachMode === 'guided'
         ? 'Guided mode: I’ll flag critical moments before you move and stop you after mistakes.'
         : 'Coach mode: play your game. I won’t announce tactics — spotting them is the skill — but I’ll stop you after mistakes and missed chances.';
-    this.feed({ tone: 'info', title: `vs ${persona.name}`, text: coachIntro });
+    this.feed({ tone: 'info', title: `vs ${persona.name}`, text: coachIntro, keep: true });
     if (this.chess.turn() === userColor) this.userTurn(); else this.oppTurn();
   }
 
@@ -200,8 +203,16 @@ export class GameController {
     // If that leaves the opponent to move (we were mid-drill), keep undoing to a user turn.
     while (plies.length && this.chess.turn() !== this.s.userColor) { plies.pop(); this.chess.undo(); }
     const last = plies[plies.length - 1];
-    this.set({ plies, fen: this.chess.fen(), lastMove: last ? { from: last.uci.slice(0, 2), to: last.uci.slice(2, 4) } : null, active: null, arrows: [], marks: {}, status: 'playing', result: null, summary: null, thinking: false, grading: false, locked: false });
-    this.feed({ tone: 'info', title: 'Took back', text: 'Back to your move.' });
+    // The coach's notes describe the game as it now stands: drop notes about moves that were taken back.
+    const n = plies.length;
+    const feed = this.s.feed.filter((e) => e.keep || e.ply <= n);
+    const fens = [this.s.config.fen || new Chess().fen(), ...plies.map((p) => p.fenAfter)];
+    this.set({
+      plies, feed, opening: openingOf(fens), fen: this.chess.fen(),
+      lastMove: last ? { from: last.uci.slice(0, 2), to: last.uci.slice(2, 4) } : null,
+      active: null, arrows: [], marks: {}, status: 'playing', result: null, summary: null,
+      thinking: false, grading: false, locked: false,
+    });
     if (this.chess.turn() === this.s.userColor) this.userTurn(); else this.oppTurn();
   }
 
@@ -253,7 +264,7 @@ export class GameController {
     const t = { gen, fen, thinkStart: Date.now(), hintsUsed: 0, moment: null, analysis: null, result: null, moved: false };
     t.rep = repertoireAt(fen, userColor, this.activeCourseIds);
     this.t = t;
-    const fens = [new Chess().fen(), ...plies.map((p) => p.fenAfter)];
+    const fens = [config.fen || new Chess().fen(), ...plies.map((p) => p.fenAfter)];
     const opening = plies.length <= 30 ? openingOf(fens) || this.s.opening : this.s.opening;
     if (opening && opening.name !== this.s.opening?.name) {
       this.feed({ tone: 'opening', title: opening.name, text: opening.idea || '' });
@@ -269,7 +280,9 @@ export class GameController {
         if (gen !== this.gen) return;
         this.set({ locked: false });
         const th = res?.lines[0] ? explainThreat(fen, res.lines[0].pv) : null;
-        if (th && (th.mate || th.gain >= 2) && this.shouldAskThreat()) {
+        // Ask once per position per game (a take-back returns to positions already asked about).
+        if (th && (th.mate || th.gain >= 2) && !this.threatsAsked.has(epd(fen)) && this.shouldAskThreat()) {
+          this.threatsAsked.add(epd(fen));
           t.threat = th;
           this.set({ active: { kind: 'threat', state: 'asking', threat: th, color: opp(userColor) } });
         }

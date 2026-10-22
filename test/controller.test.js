@@ -103,6 +103,18 @@ describe('GameController', () => {
     expect(c.getState().active.correct).toBe(true);
     expect(store.getState().stats.threat).toMatchObject({ asked: 1, correct: 1 });
     expect(c.canMove()).toBe(true);
+
+    // Move on, then take back to the same position: the question isn't asked twice,
+    // and the note about that threat is still there.
+    move(c, 'd3e4');
+    await waitFor(c, (st) => st.active?.kind === 'intervention' || (st.turn === 'user' && st.plies.length === 4));
+    if (c.getState().active?.kind === 'intervention') c.playOn();
+    await waitFor(c, (st) => st.turn === 'user' && st.plies.length === 4 && !st.locked);
+    c.takeBack();
+    const back = await waitFor(c, (st) => st.plies.length === 2 && st.analysisReady);
+    expect(back.active).toBeNull();
+    expect(back.feed.some((f) => f.tone === 'threat')).toBe(true);
+    expect(store.getState().stats.threat.asked).toBe(1);
   }, 60000);
 
   it('stays silent in Exam mode but still turns the missed mate into a review card', async () => {
@@ -129,6 +141,28 @@ describe('GameController', () => {
     expect(c.getState().marks).toEqual({ h5: 'hint' });
     c.hint();
     expect(c.getState().arrows[0]).toMatchObject({ startSquare: 'h5', endSquare: 'f7' });
+  }, 60000);
+
+  it('after a take-back, the coach notes match the position on the board', async () => {
+    const c = new GameController({ engine, oppDelay: 0, rng: () => 0.3 });
+    c.start(config());
+    await waitFor(c, (s) => s.turn === 'user');
+    move(c, 'e2e4');
+    const s2 = await waitFor(c, (s) => s.plies.length === 2 && s.turn === 'user');
+    const openingAfter2 = s2.opening?.name;
+    move(c, 'g1f3');
+    const s4 = await waitFor(c, (s) => s.plies.length === 4 && s.turn === 'user');
+    expect(s4.feed.some((f) => f.ply > 2)).toBe(true);
+    c.takeBack();
+    const back = await waitFor(c, (s) => s.plies.length === 2 && s.turn === 'user');
+    expect(back.feed.every((f) => f.keep || f.ply <= 2)).toBe(true);
+    expect(back.feed.some((f) => /took back/i.test(f.title))).toBe(false);
+    expect(back.opening?.name).toBe(openingAfter2);
+    // Replaying the same move doesn't duplicate notes.
+    move(c, 'g1f3');
+    const again = await waitFor(c, (s) => s.plies.length === 4 && s.turn === 'user');
+    const titles = again.feed.map((f) => f.title);
+    expect(new Set(titles).size).toBe(titles.length);
   }, 60000);
 });
 

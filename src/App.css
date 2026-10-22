@@ -199,7 +199,7 @@
 
 /* Move list */
 .moves-card { padding: 8px; }
-.movelist { max-height: 220px; overflow: auto; font-size: 14px; font-variant-numeric: tabular-nums; }
+.movelist { position: relative; max-height: 220px; overflow: auto; font-size: 14px; font-variant-numeric: tabular-nums; }
 .movelist-empty { color: var(--text-faint); padding: 8px; font-size: 13px; }
 .mv-row { display: grid; grid-template-columns: 34px 1fr 1fr; align-items: center; }
 .mv-row:nth-child(odd) { background: color-mix(in srgb, var(--surface-2) 60%, transparent); border-radius: 6px; }
