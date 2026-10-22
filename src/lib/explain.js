@@ -138,10 +138,13 @@ export function explainMistake({ fen, uci, movePv, winBefore, winAfter }) {
     const won = winningsPhrase(R);
 
     if (r0.to === mv.to && r0.captured) {
-      const a = attackersOf(after, mv.to, opp(side)).length;
+      const att = attackersOf(after, mv.to, opp(side)).map((x) => ({ sq: x, p: after.get(x) })).sort((x, y) => VALUES[x.p.type] - VALUES[y.p.type]);
       const d = attackersOf(after, mv.to, side).length;
-      const count = d === 0 ? 'nothing defends it' : `it’s attacked ${a}× and defended only ${d}×`;
-      return { why: `Your ${pn(mv.piece)} on ${mv.to} isn’t safe there — ${count}.`, refutation, motif: { type: 'hanging' }, kind: 'hangs' };
+      const cheap = att[0];
+      const reason = d === 0 ? 'nothing defends it'
+        : cheap && VALUES[cheap.p.type] < VALUES[mv.piece] ? `the ${pn(cheap.p.type)} on ${cheap.sq} can take it, and taking back only wins a ${pn(cheap.p.type)}`
+          : `it’s attacked ${times(att.length)} and defended only ${times(d)}`;
+      return { why: `Your ${pn(mv.piece)} on ${mv.to} isn’t safe there — ${reason}.`, refutation, motif: { type: 'hanging' }, kind: 'hangs' };
     }
     if (r0.captured && hungBefore.has(r0.to) && r0.to !== mv.from) {
       return { why: `This ignores the threat: your ${pn(r0.captured)} on ${r0.to} was already under attack and is still loose.`, refutation, motif: { type: 'hanging' }, kind: 'ignored-threat' };
@@ -233,8 +236,11 @@ const joinAnd = (xs) => (xs.length <= 1 ? xs[0] || '' : `${xs.slice(0, -1).join(
 function settle(fen, pv) {
   const U = analyzeLine(fen, pv, 12);
   const settled = U.stables.filter((i) => i >= 1 && i <= 7);
-  const last = settled.length ? settled[settled.length - 1] : Math.min(1, U.steps.length - 1);
-  const end = settled.find((i) => U.mats.slice(i, last + 1).every((m) => m === U.mats[last])) ?? last;
+  if (!settled.length) return { U, end: Math.min(1, U.steps.length - 1) };
+  // Stop at the first quiet point; keep following only if a piece-sized swing comes later
+  // (e.g. winning the knight back) — not for stray pawn grabs.
+  let end = settled[0];
+  for (const i of settled) if (Math.abs(U.mats[i] - U.mats[end]) >= 2) end = i;
   return { U, end };
 }
 
@@ -262,6 +268,7 @@ export function explainConsequence({ fen, movePv, winAfter }) {
     const att = attackersOf(B, r1.to, opp(me)).length;
     reply += `, taking the ${pn(r1.captured)} on ${r1.to}`;
     if (def === 0) reply += ' — nothing defends it';
+    else if (VALUES[r1.piece] < VALUES[r1.captured]) reply += ` with the ${pn(r1.piece)}`;
     else if (att > def) reply += ` — it’s attacked ${times(att)} and defended only ${times(def)}`;
   } else {
     const hits = threatsBy(boardOf(r1.fenAfter), r1.to).filter((x) => !x.check);

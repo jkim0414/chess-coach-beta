@@ -4,7 +4,7 @@
 import { analyzeLine, boardOf, attackersOf, pinnedBy, motifsOfMove, see } from './tactics.js';
 import { Chess } from 'chess.js';
 import { nullMoveFen, formatLine, NAMES, COLOR_NAME, opp, playLine, lineText } from './chessutil.js';
-import { describeMotif, describeQuietMove, winningsPhrase, capitalize, explainThreat, MOTIFS } from './explain.js';
+import { describeMotif, describeQuietMove, winningsPhrase, capitalize, explainThreat, MOTIFS, prose } from './explain.js';
 
 const pn = (t) => NAMES[t];
 const num = (st) => formatLine(st.fenBefore, [st.san]); // "12.Rg3" / "12...Kh7"
@@ -51,6 +51,15 @@ function createdBy(fen, threat) {
   if (threat.mateIdx >= 0) return !before.san.includes('#');
   if (!before.captured) return true;
   return (see(boardOf(fen), t0.to, threat.side, t0.from) ?? 0) <= 0; // it used to lose material
+}
+
+/** After our move, can the opponent still make the capture they were threatening? */
+function threatPersists(fenAfter, tm) {
+  if (!tm?.from || !tm.to) return false;
+  let r = null;
+  try { r = new Chess(fenAfter).move({ from: tm.from, to: tm.to, promotion: 'q' }); } catch { r = null; }
+  if (!r || !r.captured) return false;
+  return (see(boardOf(fenAfter), tm.to, r.color, tm.from) ?? 0) > 0;
 }
 
 /** Synchronous plan without engine extras (no threat search). */
@@ -156,8 +165,16 @@ export function describePlan(plan, { userMove } = {}) {
   } else if (threat) out.push(`${first} ${threatClause(threat)}.`);
   else out.push(`${first} ${describeQuietMove(fen, s0.uci)}.`);
 
-  // A good move in a position with a real threat against you is, first of all, a defence.
-  if (plan.oppThreat && !m0 && L.gain < 1) out.push(`It also takes care of the threat — ${plan.oppThreat.text.replace(/^(\w+) threatens/, (x, who) => `${who} was threatening`)}`);
+  // Did the move deal with the opponent's threat, or leave it (because something matters more)?
+  if (plan.oppThreat && !m0 && L.gain < 1) {
+    const tm = plan.oppThreat.move;
+    if (!threatPersists(s0.fenAfter, tm)) {
+      out.push(`It also takes care of the threat — ${plan.oppThreat.text.replace(/^(\w+) threatens/, (x, who) => `${who} was threatening`)}`);
+    } else {
+      const victim = boardOf(s0.fenAfter).get(tm.to);
+      out.push(`It leaves your ${victim ? pn(victim.type) : 'piece'} on ${tm.to} to be taken (${tm.color ? prose(tm.color, tm.san) : tm.san}) — ${plan.win >= 0.9 ? 'you’re still winning comfortably after that' : 'the engine judges that a price worth paying here'}.`);
+    }
+  }
 
   const r1 = steps[1];
   if (L.gain >= 1 && L.keyIdx === 2) {

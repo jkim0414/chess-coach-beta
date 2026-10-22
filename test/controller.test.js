@@ -103,6 +103,11 @@ describe('GameController', () => {
     expect(c.getState().active.correct).toBe(true);
     expect(store.getState().stats.threat).toMatchObject({ asked: 1, correct: 1 });
     expect(c.canMove()).toBe(true);
+    // A hint is still available after answering the threat question.
+    await waitFor(c, (st) => st.analysisReady);
+    await c.hint();
+    expect(c.getState().active).toMatchObject({ kind: 'moment', type: 'hint', hintLevel: 1 });
+    expect(c.getState().active.hintText).toBeTruthy();
 
     // Move on, then take back to the same position: the question isn't asked twice,
     // and the note about that threat is still there.

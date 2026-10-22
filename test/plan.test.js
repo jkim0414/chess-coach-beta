@@ -205,3 +205,30 @@ describe('pins', () => {
   });
 });
 
+describe('winning positions', () => {
+  // Reported from play: 30.Qe4+ (the b7-bishop takes the queen) was explained as "attacked 1×
+  // and defended only 1×", and the hint claimed 30.Rae1 "takes care of the threat" to the g3
+  // bishop although Black takes it.
+  const BEFORE_QE4 = '8/PbpqNr1k/7p/4Q1p1/1P3p2/2P3B1/P3RPPP/R5K1 w - - 0 30';
+
+  it('explains a piece lost to a cheaper attacker', async () => {
+    const fresh = createNodeEngine();
+    const b = await fresh.analyze(BEFORE_QE4, { depth: 14 });
+    const q = await fresh.analyze(BEFORE_QE4, { depth: 14, searchmoves: ['e5e4'] });
+    fresh.terminate();
+    const ex = explainMistake({ fen: BEFORE_QE4, uci: 'e5e4', movePv: q.lines[0].pv, winBefore: winOf(b.lines[0].score), winAfter: winOf(q.lines[0].score) });
+    expect(ex.why).toBe('Your queen on e4 isn’t safe there — the bishop on b7 can take it, and taking back only wins a bishop.');
+    const c = explainConsequence({ fen: BEFORE_QE4, movePv: q.lines[0].pv, winAfter: winOf(q.lines[0].score) });
+    expect(c.summary).toBe('30...Bxe4 31.Rxe4: you’ve given your queen for a bishop');
+  }, 60000);
+
+  it('does not claim a move deals with a threat it leaves standing', async () => {
+    const fake = { analyze: async (fen) => ({ lines: [{ pv: fen.includes(' b ') && fen.startsWith('8/PbpqNr1k/7p/4Q1p1') ? ['f4g3'] : ['b7a8'], score: { type: 'cp', value: 0 } }] }) };
+    const plan = await planOf(fake, BEFORE_QE4, ['a1e1', 'f4g3', 'h2g3', 'b7a8'], { opponentThreat: true });
+    plan.win = 0.95;
+    const text = describePlan(plan);
+    expect(text).not.toMatch(/takes care of the threat/);
+    expect(text).toMatch(/leaves your bishop on g3 to be taken \(…fxg3\) — you’re still winning comfortably/);
+  });
+});
+

@@ -734,6 +734,7 @@ export class GameController {
     t.planPromise = t.planPromise || planOf(this.engine, t.fen, best, { opponentThreat: !t.threat });
     const plan = await t.planPromise;
     if (plan && t.threat && !plan.oppThreat) plan.oppThreat = t.threat;
+    if (plan && t.result?.lines[0]) plan.win = winOf(t.result.lines[0].score);
     t.plan = plan;
     return plan;
   }

@@ -40,6 +40,9 @@ function Callout({ s, c }) {
         <div className="callout-kicker">{a.correct ? 'Threat spotted ✓' : 'The threat'}</div>
         <p>{a.threat.text}</p>
         <p className="muted">Now find a move that deals with it.</p>
+        <div className="callout-actions">
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => c.hint()} disabled={!s.analysisReady || s.hintPending}>{s.hintPending ? 'Thinking…' : 'Hint'}</button>
+        </div>
       </div>
     );
   }
