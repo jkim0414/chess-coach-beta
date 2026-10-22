@@ -218,7 +218,7 @@ export function discoveredAttacks(before, after, from, color, movedTo) {
   return out;
 }
 
-function between(a, b) {
+export function between(a, b) {
   const [af, ar] = coords(a), [bf, br] = coords(b);
   const df = Math.sign(bf - af), dr = Math.sign(br - ar);
   const out = [];

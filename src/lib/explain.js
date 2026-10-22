@@ -2,7 +2,7 @@
 // (attack maps, exchanges, engine lines) so explanations stay truthful.
 import { Chess } from 'chess.js';
 import { NAMES, VALUES, COLOR_NAME, formatLine, opp, turnOf, playLine, coords, nullMoveFen, lineText, materialBalance } from './chessutil.js';
-import { analyzeLine, boardOf, hangingPieces, see, threatsBy, attackersOf, attacksFrom, motifsOfMove } from './tactics.js';
+import { analyzeLine, boardOf, hangingPieces, see, threatsBy, attackersOf, attacksFrom, motifsOfMove, pinnedBy, between } from './tactics.js';
 
 export const MOTIFS = {
   fork: { name: 'Fork', hint: 'Look for one move that attacks two things at once.', theme: 'fork' },
@@ -42,7 +42,12 @@ export function winningsPhrase(L) {
     if (!s.captured) return;
     (s.color === L.side ? ours : theirs).push({ type: s.captured, square: s.to });
   });
-  // Even trades cancel out; what's left is what was really won.
+  // Even trades cancel out; what's left is what was really won. A capture and the
+  // recapture on the same square pair up first, then any captures of equal value.
+  for (let i = ours.length - 1; i >= 0; i--) {
+    const j = theirs.findIndex((x) => x.square === ours[i].square && VALUES[x.type] === VALUES[ours[i].type]);
+    if (j >= 0) { theirs.splice(j, 1); ours.splice(i, 1); }
+  }
   for (let i = ours.length - 1; i >= 0; i--) {
     const j = theirs.findIndex((x) => VALUES[x.type] === VALUES[ours[i].type]);
     if (j >= 0) { theirs.splice(j, 1); ours.splice(i, 1); }
@@ -156,14 +161,18 @@ export function explainMistake({ fen, uci, movePv, winBefore, winAfter, bestPv =
 
   // What your move itself took counts: a trade, or winning more than you give back, isn't a loss.
   const ownGain = (mv.captured ? VALUES[mv.captured] : 0) + (mv.promotion ? VALUES[mv.promotion] - 1 : 0);
-  if (r0 && R.gain - ownGain >= 1) {
+  // Material claims only for losses that come quickly; deep in the line the moves aren't forced.
+  const early = analyzeLine(mv.fenAfter, reply, 6);
+  if (r0 && R.gain - ownGain >= 1 && early.gain - ownGain >= 1) {
     const before = boardOf(fen);
     const after = boardOf(mv.fenAfter);
     const hungBefore = new Set(hangingPieces(before, side).map((h) => h.square));
     const hungAfter = hangingPieces(after, side);
     const won = winningsPhrase(R);
+    // The piece you just moved can be taken (even if the engine plays something else first).
+    const movedLoose = hungAfter.some((h) => h.square === mv.to) && !(r0.to === mv.to && r0.captured);
 
-    if (r0.to === mv.to && r0.captured) {
+    if ((r0.to === mv.to && r0.captured) || movedLoose) {
       const att = attackersOf(after, mv.to, opp(side)).map((x) => ({ sq: x, p: after.get(x) })).sort((x, y) => VALUES[x.p.type] - VALUES[y.p.type]);
       const d = attackersOf(after, mv.to, side).length;
       const cheap = att[0];
@@ -173,19 +182,32 @@ export function explainMistake({ fen, uci, movePv, winBefore, winAfter, bestPv =
           : att.length > d ? `it’s attacked ${times(att.length)} and defended only ${times(d)}` : null;
       if (reason) return { why: `Your ${pn(mine)} on ${mv.to} isn’t safe there — ${reason}.`, refutation, motif: { type: 'hanging' }, kind: 'hangs' };
     }
-    if (r0.captured && hungBefore.has(r0.to) && r0.to !== mv.from) {
+    // "Ignored the threat" only if the best move actually dealt with it.
+    const bestKept = (() => {
+      const [b0] = bestPv?.length ? playLine(fen, [bestPv[0]]) : [];
+      return !b0 || !hangingPieces(boardOf(b0.fenAfter), side).some((h) => h.square === (b0.from === r0.to ? b0.to : r0.to));
+    })();
+    if (r0.captured && hungBefore.has(r0.to) && r0.to !== mv.from && bestKept) {
       const victim = after.get(r0.to);
       const att = attackersOf(after, r0.to, opp(side)).map((x) => ({ sq: x, p: after.get(x) })).sort((x, y) => VALUES[x.p.type] - VALUES[y.p.type]);
-      const defs = attackersOf(after, r0.to, side).length;
+      const defsAll = attackersOf(after, r0.to, side);
+      const pinned = defsAll.filter((d) => pinnedBy(after, d, opp(side)));
+      const defs = defsAll.length - pinned.length;
       const cheap = att[0];
-      const how = !defs ? 'and nothing defends it'
-        : cheap && VALUES[cheap.p.type] < VALUES[victim.type] ? `by the ${pn(cheap.p.type)} on ${cheap.sq} — defending it doesn’t help against a cheaper attacker; it needed to move`
-          : 'and it’s still attacked more times than it’s defended';
-      return { why: `This ignores the threat: your ${pn(r0.captured)} on ${r0.to} was already under attack${how.startsWith('by') ? ' ' : ', '}${how}.`, refutation, motif: { type: 'hanging' }, kind: 'ignored-threat' };
+      const how = !defsAll.length ? 'and nothing defends it'
+        : !defs ? `and its defender on ${pinned[0]} is pinned`
+          : cheap && VALUES[cheap.p.type] < VALUES[victim.type] ? `by the ${pn(cheap.p.type)} on ${cheap.sq} — defending it doesn’t help against a cheaper attacker; it needed to move`
+            : att.length > defs ? 'and it’s still attacked more times than it’s defended' : null;
+      if (how) return { why: `This ignores the threat: your ${pn(r0.captured)} on ${r0.to} was already under attack${how.startsWith('by') ? ' ' : ', '}${how}.`, refutation, motif: { type: 'hanging' }, kind: 'ignored-threat' };
     }
     const newlyLoose = hungAfter.find((h) => !hungBefore.has(h.square) && h.square !== mv.to);
     if (newlyLoose && r0.to === newlyLoose.square) {
-      return { why: `Moving the ${pn(mv.piece)} left your ${pn(newlyLoose.piece.type)} on ${newlyLoose.square} without enough protection.`, refutation, motif: { type: 'hanging' }, kind: 'removed-defender' };
+      // Did the move open a line onto it, or take away a defender?
+      const opener = attackersOf(after, newlyLoose.square, opp(side)).find((a) => ['b', 'r', 'q'].includes(after.get(a).type) && between(a, newlyLoose.square).includes(mv.from));
+      const why = opener
+        ? `Moving the ${pn(mv.piece)} opened the line from ${T}’s ${pn(after.get(opener).type)} on ${opener} to your ${pn(newlyLoose.piece.type)} on ${newlyLoose.square}.`
+        : `Moving the ${pn(mv.piece)} left your ${pn(newlyLoose.piece.type)} on ${newlyLoose.square} without enough protection.`;
+      return { why, refutation, motif: { type: 'hanging' }, kind: 'removed-defender' };
     }
     const ms = R.motif && R.steps[R.motif.ply ?? 0];
     const m = describeMotif(R.motif, R.steps, ms ? lineText([ms]) : undefined);
@@ -222,8 +244,9 @@ export function explainMistake({ fen, uci, movePv, winBefore, winAfter, bestPv =
     };
   }
   const cost = winAfter >= 0.6 ? 'it lets much of your advantage slip'
-    : winAfter >= 0.4 ? (winBefore >= 0.6 ? `it lets ${T} back into the game` : 'it gives up your edge')
-      : `it gives ${T} the easier game`;
+    : winAfter >= 0.4 && winBefore >= 0.6 ? `it lets ${T} back into the game`
+      : winAfter >= 0.4 && winBefore >= 0.55 ? 'it gives up your edge'
+        : `it gives ${T} the easier game`;
   return {
     why: `It doesn’t lose material, but ${cost}: ${evals}.`,
     refutation, motif: null, kind: 'positional',
@@ -416,7 +439,7 @@ export function explainThreat(fen, nullPv) {
     if (hits?.length >= 2 && (s0.from === att || hits.some((h) => h.piece.type !== 'p'))) {
       squares.add(att);
       const names = hits.slice(0, 3).map((h) => `${pn(h.piece.type)} on ${h.square}`);
-      forkText = `${T}’s ${pn(B.get(att).type)} on ${att} attacks your ${names.join(' and your ')} at the same time — one of them will fall unless you find something forcing.`;
+      forkText = `${T}’s ${pn(B.get(att).type)} on ${att} attacks your ${joinAnd(names)} at the same time. Can you save both?`;
     }
   }
 
@@ -429,11 +452,18 @@ export function explainThreat(fen, nullPv) {
     const mv = att && new Chess(nf).moves({ verbose: true }).find((m) => m.from === att && m.to === top.square);
     if (mv) {
       const cap = pn(B.get(att).type), vic = pn(top.piece.type);
-      const defended = attackersOf(B, top.square, mine).length > 0 && top.gain < VALUES[top.piece.type];
+      const defenders = attackersOf(B, top.square, mine).sort((a, b) => VALUES[B.get(a).type] - VALUES[B.get(b).type]);
+      const defended = defenders.length > 0 && top.gain < VALUES[top.piece.type];
+      // "Outright" only if nothing comes back: no recapture, and nothing of theirs hanging to you.
+      const theirLoose = hangingPieces(B, L.side).length > 0;
+      const how = defended ? `cost you the ${vic} for a ${cap}`
+        : defenders.length ? `win it — your ${pn(B.get(defenders[0]).type)} on ${defenders[0]} can’t safely take back`
+          : theirLoose || L.gain < top.gain - 1 ? 'win it' : 'win it outright';
       direct = {
-        text: `${T}’s ${cap} on ${att} attacks your ${vic} on ${top.square} — ${prose(mv.color, mv.san)} would ${defended ? `cost you the ${vic} for a ${cap}` : 'win it outright'}.`,
+        text: `${T}’s ${cap} on ${att} attacks your ${vic} on ${top.square} — ${prose(mv.color, mv.san)} would ${how}.`,
         move: { from: att, to: top.square, san: mv.san, color: mv.color, captured: top.piece.type },
-        gain: top.gain,
+        // What the engine's line shows matters too: something may come back elsewhere.
+        gain: L.steps.length >= 3 ? Math.min(top.gain, Math.max(L.gain, 0) + 1) : top.gain,
       };
       squares.add(att);
     }
@@ -451,7 +481,12 @@ export function explainThreat(fen, nullPv) {
     // Say what the first move takes, and the next capture if it's part of the haul.
     const caps = L.steps.slice(0, L.keyIdx + 1).filter((s) => s.color === L.side && s.captured);
     const takes = s0.captured ? `, taking your ${pn(s0.captured)} on ${s0.to}` : '';
-    const next = s0.captured && caps[1] && !later ? ` — and then ${prose(caps[1].color, caps[1].san)} takes the ${pn(caps[1].captured)} on ${caps[1].to} too` : '';
+    // A second capture only if that piece stands there now, and you don't take anything in between.
+    const i1 = caps[1] ? L.steps.indexOf(caps[1]) : -1;
+    // …and only if the first capture can't simply be taken back.
+    const unanswered = s0.captured && (see(boardOf(nf), s0.to, L.side, s0.from) ?? 0) >= VALUES[s0.captured];
+    const clean = unanswered && i1 > 0 && B.get(caps[1].to)?.type === caps[1].captured && !L.steps.slice(1, i1).some((s) => s.captured && s.color !== L.side);
+    const next = s0.captured && clean && !later ? ` — and then ${prose(caps[1].color, caps[1].san)} takes the ${pn(caps[1].captured)} on ${caps[1].to} too` : '';
     const won = winningsPhrase(L);
     const winning = (s0.captured && caps.length === 1 && won === `the ${pn(s0.captured)} on ${s0.to}`) || next ? '' : `winning ${won}`;
     const lead = `${T} threatens ${first}${takes}${later ? ` and then ${later}` : ''}`;
@@ -530,6 +565,7 @@ export function describeQuietMove(fen, uci) {
       text = r.captured === r.piece ? `trades ${pn(r.piece)}s on ${r.to}` : `trades your ${pn(r.piece)} for the ${pn(r.captured)} on ${r.to}`;
     } else text = `takes the ${pn(r.captured)} on ${r.to}`;
     if (savedPiece?.square === r.from) text += ` — the ${pn(r.piece)} was under attack anyway`;
+    if (new Chess(fen).inCheck()) text += ', getting out of check';
     return text;
   }
 
@@ -545,7 +581,7 @@ export function describeQuietMove(fen, uci) {
 
   if (r.piece === 'p') {
     const passed = isPassed(after, r.to, side);
-    if (passed && rel >= 5) return `pushes the passed pawn to ${r.to}`;
+    if (passed && rel >= 5) return isPassed(before, r.from, side) ? `pushes the passed pawn to ${r.to}` : `pushes the pawn to ${r.to}, where it becomes a passed pawn`;
     if ((r.to[0] === 'd' || r.to[0] === 'e') && (rel === 4 || rel === 5)) return `claims the centre with a pawn on ${r.to}`;
     if (moveNo <= 12 && (r.to[0] === 'c' || r.to[0] === 'f')) return `supports the fight for the centre from the ${r.to[0]}-file`;
     if (rel >= 5 && kingSideOfFile(after, opp(side), f)) return `starts a pawn storm against the enemy king`;
@@ -607,8 +643,9 @@ function pawnPurpose(before, after, r, side) {
   // 2. It opens a line for one of your long-range pieces.
   for (const [sq, p] of after) {
     if (p.color !== side || !['b', 'q', 'r'].includes(p.type)) continue;
-    // The pawn was blocking this piece's line, which now runs on through the vacated square.
-    const gained = attacksFrom(after, sq).filter((x) => !attacksFrom(before, sq).includes(x));
+    // The pawn was blocking this piece's line, which now runs on through the vacated square
+    // to at least one more square it can use (not just the pawn's own new square).
+    const gained = attacksFrom(after, sq).filter((x) => !attacksFrom(before, sq).includes(x) && after.get(x)?.color !== side);
     if (gained.length && attacksFrom(after, sq).includes(r.from)) return `opens the way for your ${pn(p.type)} on ${sq} (it can now use ${[r.from, ...gained].slice(0, 2).join(' and ')})`;
   }
   // 3. It gives the king an escape square.

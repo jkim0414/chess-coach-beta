@@ -98,7 +98,7 @@ describe('GameController', () => {
     expect(s.active.state).toBe('asking');
     expect(c.canMove()).toBe(false);
     expect(s.active.threat.squares).toEqual(expect.arrayContaining(['d3', 'f3']));
-    expect(s.active.threat.text).toMatch(/pawn on e4 attacks your (bishop on d3|knight on f3) and your (bishop on d3|knight on f3)/);
+    expect(s.active.threat.text).toMatch(/pawn on e4 attacks your (bishop on d3|knight on f3) and (bishop on d3|knight on f3)/);
     c.answerThreat('f3');
     expect(c.getState().active.correct).toBe(true);
     expect(store.getState().stats.threat).toMatchObject({ asked: 1, correct: 1 });

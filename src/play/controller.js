@@ -10,10 +10,10 @@
 // No React in here — the UI subscribes to snapshots — so the whole flow can be
 // driven from tests with a real engine.
 import { Chess } from 'chess.js';
-import { epd, opp, uciToObj, moveToUci, nullMoveFen, gamePhase, COLOR_NAME, NAMES, turnOf, uciToSan, formatLine } from '../lib/chessutil.js';
+import { epd, opp, uciToObj, moveToUci, nullMoveFen, gamePhase, COLOR_NAME, NAMES, turnOf, uciToSan, formatLine, materialBalance, playLine } from '../lib/chessutil.js';
 import { winOf, gradeFromLoss, gameAccuracy, GRADES } from '../lib/evaluation.js';
 import { analyzeLine, boardOf, see } from '../lib/tactics.js';
-import { explainMistake, explainThreat, explainConsequence, naiveRecapture, recaptureNote, MOTIFS, describeQuietMove, prose } from '../lib/explain.js';
+import { explainMistake, explainThreat, explainConsequence, naiveRecapture, recaptureNote, MOTIFS, materialPhrase, prose } from '../lib/explain.js';
 import { planOf, planSync, describePlan, planHints } from '../lib/plan.js';
 import { chooseMove, resolvePersona } from '../lib/opponent.js';
 import { openingOf, bookMovesAt } from '../lib/openings.js';
@@ -62,11 +62,16 @@ export async function confirmThreat(engine, fen, th, passScore = null) {
   if (!isRealThreat(th)) return null;
   // Only worth stopping for if passing would really cost you, compared with your best move now.
   if (passScore) {
-    const best = (await engine.analyze(fen, { depth: THREAT_DEPTH, movetime: 800 }))?.lines[0]?.score;
+    const top = (await engine.analyze(fen, { depth: THREAT_DEPTH, movetime: 800 }))?.lines[0];
+    const best = top?.score;
     if (best) {
       if (best.type === 'mate' && best.value > 0) return null; // you have a mate yourself
-      // Not when you're lost whatever you do, or still clearly winning even if you ignore it.
-      if (winOf(best) < 0.05 || 1 - winOf(passScore) >= 0.85) return null;
+      if (winOf(best) < 0.05) return null; // lost whatever you do
+      // Still clearly winning even if you ignore it — unless it's your queen.
+      const queen = th.move.captured === 'q' || th.gain >= 8;
+      if (!queen && 1 - winOf(passScore) >= 0.85) return null;
+      // You can win far more yourself right now (e.g. their queen): that comes first.
+      if (analyzeLine(fen, top.pv, 6).gain >= Math.max(5, th.gain + 3)) return null;
     }
   }
   let out = th;
@@ -80,7 +85,7 @@ export async function confirmThreat(engine, fen, th, passScore = null) {
   // The attacker may be just as loose — worth knowing before you defend.
   const B = boardOf(fen), me = turnOf(fen), from = th.move.from;
   if (!th.mate && B.get(from) && (see(B, from, me) ?? 0) > 0) {
-    out = { ...out, counter: `It’s your move, though — ${COLOR_NAME[opp(me)]}’s ${NAMES[B.get(from).type]} on ${from} is loose too.` };
+    out = { ...out, counter: `It’s your move, though — ${COLOR_NAME[opp(me)]}’s ${NAMES[B.get(from).type]} on ${from} can be won too.` };
   }
   return out;
 }
@@ -99,7 +104,9 @@ export function detectMoment(fen, lines, oppLoss = 0) {
     return { type: 'mate', motif: L.motif?.type === 'back-rank' ? 'back-rank' : 'mate', L, gap };
   }
   if (gap >= 0.12 && L.gain >= 2 && w1 >= 0.55) return { type: 'tactic', motif: L.motif?.type || 'material', L, gap };
-  if (gap >= 0.2 && w1 < 0.55 && w1 > 0.06) return { type: 'defend', motif: 'defend', L, gap };
+  // Taking back in the middle of a trade is obvious, not a defensive "only move".
+  const recapture = L.steps[0]?.captured && materialBalance(fen, turnOf(fen)) < 0;
+  if (gap >= 0.2 && w1 < 0.55 && w1 > 0.06 && !recapture) return { type: 'defend', motif: 'defend', L, gap };
   if (oppLoss >= 0.15 && gap >= 0.08 && w1 >= 0.6) return { type: 'punish', motif: L.gain >= 1 ? L.motif?.type || 'material' : null, L, gap };
   return null;
 }
@@ -334,7 +341,8 @@ export class GameController {
     const opening = plies.length <= 30 ? openingOf(fens) || this.s.opening : this.s.opening;
     const threatCheck = config.threatPrompts && config.coachMode !== 'exam' && plies.length > 1 && !this.chess.isCheck() && threatCheckApplies(plies[plies.length - 1]);
     if (opening && opening.name !== this.s.opening?.name) {
-      const note = { tone: 'opening', title: opening.name, text: opening.idea || '' };
+      // In Exam mode just the name: the idea text can tell you what to play.
+      const note = { tone: 'opening', title: opening.name, text: config.coachMode === 'exam' ? '' : opening.idea || '' };
       // With a threat question coming, post it afterwards (its idea text can give the answer away).
       if (threatCheck) t.openingNote = note; else this.feed(note);
     }
@@ -716,15 +724,15 @@ export class GameController {
       .map((l) => formatLine(t.fen, [uciToSan(t.fen, l.pv[0])]));
     const also = others.length ? ` Also good here: ${others.join(', ')}.` : '';
     this.set({ active: null, arrows: [] });
-    const entry = this.feed({ tone: 'best', title: `${san} — that’s it`, text: explain + also, actions: a.reason === 'missed' ? practise(a.motif) : undefined });
+    // A combination still to finish: don't print its moves in the feed before the drill asks for them.
+    const L = a.reason === 'missed' && ev?.line ? analyzeLine(t.fen, ev.line.pv, 12) : null;
+    const drill = L && (L.mateIdx >= 0 ? L.mateIdx : L.keyIdx) >= 2;
+    const entry = this.feed({ tone: 'best', title: `${san} — that’s it`, text: drill ? 'That’s the first move — now finish the combination.' : explain + also, actions: a.reason === 'missed' ? practise(a.motif) : undefined });
+    if (drill) { this.startDrill(t, L); return; }
     if (a.reason !== 'repertoire' && ev?.line) {
       planOf(this.engine, t.fen, ev.line.pv, { opponentThreat: true }).then((plan) => {
         if (plan) this.updateFeed(entry.id, { text: describePlan(plan) + also });
       });
-    }
-    if (a.reason === 'missed' && ev?.line) {
-      const L = analyzeLine(t.fen, ev.line.pv, 12);
-      if ((L.mateIdx >= 0 ? L.mateIdx : L.keyIdx) >= 2) { this.startDrill(t, L); return; }
     }
     this.oppTurn();
   }
@@ -782,7 +790,7 @@ export class GameController {
     t.planPromise = t.planPromise || planOf(this.engine, t.fen, best, { opponentThreat: !t.threat });
     const plan = await t.planPromise;
     if (plan && t.threat && !plan.oppThreat) plan.oppThreat = t.threat;
-    if (plan && t.result?.lines[0]) plan.win = winOf(t.result.lines[0].score);
+    if (plan && t.result?.lines[0]) { plan.win = winOf(t.result.lines[0].score); plan.score = t.result.lines[0].score; }
     t.plan = plan;
     return plan;
   }
@@ -880,7 +888,8 @@ export class GameController {
     }
     if (idx > end || !L.steps[idx]) {
       this.set({ active: null, arrows: [] });
-      this.feed({ tone: 'best', title: 'Combination complete', text: L.mateIdx >= 0 ? 'Checkmate is coming — well played.' : `You’ve banked the advantage: ${prose(turnOf(fen), uciToSan(fen, uci))} ${describeQuietMove(fen, uci)}.` });
+      const ahead = materialBalance(playLine(fen, [uci])[0]?.fenAfter || fen, turnOf(fen));
+      this.feed({ tone: 'best', title: 'Combination complete', text: L.mateIdx >= 0 ? 'Checkmate is coming — well played.' : `You’ve banked the advantage${ahead >= 1 ? `: you’re ahead by ${materialPhrase(ahead)}` : ''}.` });
       this.oppTurn();
       return;
     }

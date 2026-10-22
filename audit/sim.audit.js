@@ -198,6 +198,7 @@ async function probeTurn(probe, t, gameId, s, rec, rng) {
   try {
     const plan = await planOf(probe, fen, best.pv, { opponentThreat: true });
     plan.win = winOf(best.score);
+    plan.score = best.score;
     rec({
       type: 'plan', gameId, ply: s.plies.length, fen, pv: best.pv, score: best.score,
       text: describePlan(plan), hints: planHints(plan).map((h) => ({ text: h.text, marks: h.marks, arrows: h.arrows })),
