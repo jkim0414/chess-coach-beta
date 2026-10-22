@@ -1,7 +1,7 @@
 // The coach's words. Everything here is derived from concrete board facts
 // (attack maps, exchanges, engine lines) so explanations stay truthful.
 import { Chess } from 'chess.js';
-import { NAMES, VALUES, COLOR_NAME, formatLine, opp, turnOf, playLine, coords, nullMoveFen, narrate } from './chessutil.js';
+import { NAMES, VALUES, COLOR_NAME, formatLine, opp, turnOf, playLine, coords, nullMoveFen, lineText } from './chessutil.js';
 import { analyzeLine, boardOf, hangingPieces, see, threatsBy, attackersOf, attacksFrom } from './tactics.js';
 import { verdict } from './evaluation.js';
 
@@ -122,7 +122,7 @@ export function explainMistake({ fen, uci, movePv, winBefore, winAfter }) {
   const R = analyzeLine(mv.fenAfter, reply, 10);
   const r0 = R.steps[0];
   const refShowTo = R.mateIdx >= 0 ? R.mateIdx + 1 : Math.min(R.steps.length, Math.max(R.keyIdx + 1, 1));
-  const refutation = r0 ? narrate(R.steps.slice(0, refShowTo)) : '';
+  const refutation = r0 ? lineText(R.steps.slice(0, refShowTo)) : '';
   const yourMove = prose(mv.color, mv.san);
   const T = them(side);
 
@@ -202,10 +202,10 @@ export function explainConsequence({ fen, movePv, winAfter }) {
   const outcome = balance(st.slice(0, end + 1), me, net);
   const notFree = g0 > 0 && net >= 0 && net < g0 && st[0].captured ? ` — the ${pn(st[0].captured)} wasn’t really free` : '';
   const sentences = [`${reply}.`];
-  if (end >= 2) sentences.push(`After ${narrate(st.slice(2, end + 1))}, ${outcome}${notFree}.`);
+  if (end >= 2) sentences.push(`After ${lineText(st.slice(2, end + 1))}, ${outcome}${notFree}.`);
   else if (net !== g0 || net < 0) sentences.push(`${capitalize(outcome)}${notFree}.`);
   if (net >= 0 && winAfter < 0.42) sentences.push(`${Them} also gets the more comfortable position.`);
-  return { text: sentences.join(' '), summary: `${narrate(st.slice(1, end + 1))}: ${outcome}`, net, g0, telling: !!r1.captured || net !== g0 };
+  return { text: sentences.join(' '), summary: `${lineText(st.slice(1, end + 1))}: ${outcome}`, net, g0, telling: !!r1.captured || net !== g0 };
 }
 
 const COUNT = ['', 'a', 'two', 'three', 'four', 'five'];
@@ -242,7 +242,7 @@ export function explainThreat(fen, nullPv) {
   const s0 = L.steps[0];
   const first = prose(s0.color, s0.san);
   const showTo = L.mateIdx >= 0 ? L.mateIdx + 1 : Math.max(1, Math.min(L.keyIdx + 1, 3));
-  const line = narrate(L.steps.slice(0, showTo));
+  const line = lineText(L.steps.slice(0, showTo));
 
   const squares = new Set([s0.from, s0.to]);
   L.steps.slice(0, (L.keyIdx || 0) + 1).forEach((s) => { if (s.color === L.side && s.captured) squares.add(s.to); });

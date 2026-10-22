@@ -7,7 +7,7 @@ import { COURSES, repertoireAt, openingRuns, cardIdFor } from '../src/lib/course
 import { bookMovesAt, openingOf } from '../src/lib/openings.js';
 import { styleBonus, strengthParams, chooseMove, personaById } from '../src/lib/opponent.js';
 import { explainMistake, describeQuietMove } from '../src/lib/explain.js';
-import { formatLine, nullMoveFen, playLine, narrate } from '../src/lib/chessutil.js';
+import { formatLine, nullMoveFen, playLine, lineText } from '../src/lib/chessutil.js';
 
 const types = (fen, uci) => motifsOfMove(fen, uci).map((m) => m.type);
 
@@ -69,9 +69,9 @@ describe('explanations', () => {
     expect(describeQuietMove('rnbqkbnr/pppppppp/8/8/8/5N2/PPPPPPPP/RNBQKB1R w KQkq - 0 1', 'b2b3')).toMatch(/opens the way for your bishop on c1/);
     expect(describeQuietMove('r1bq1rk1/ppp2ppp/2n2n2/3pp3/8/3P1N2/PPP1PPPP/RNBQ1RK1 w - - 0 7', 'h2h3')).toMatch(/escape square on h2.*off g4/);
   });
-  it('narrates lines so it is clear whose move is whose', () => {
+  it('writes lines in standard notation, starting from either side', () => {
     const steps = playLine('r2qk2r/1pp2pp1/pbnpbn1p/4p3/2B1P3/1PPP1NN1/P4PPP/R1BQR1K1 b kq - 0 11', ['e8g8', 'a2a4', 'f8e8']);
-    expect(narrate(steps)).toBe('Black castles (11...O-O), White 12.a4, Black 12...Re8');
+    expect(lineText(steps)).toBe('11...O-O 12.a4 Re8');
   });
   it('formats lines with move numbers from any side', () => {
     expect(formatLine('rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1', ['e5', 'Nf3'])).toBe('1...e5 2.Nf3');

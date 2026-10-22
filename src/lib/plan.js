@@ -2,7 +2,7 @@
 // that threat works, how the opponent should answer, and why the follow-up then wins.
 // Also builds the hint ladder (target → piece → move + idea) from the same analysis.
 import { analyzeLine, boardOf, attackersOf, pinnedBy, motifsOfMove } from './tactics.js';
-import { nullMoveFen, formatLine, NAMES, COLOR_NAME, opp, playLine, narrate } from './chessutil.js';
+import { nullMoveFen, formatLine, NAMES, COLOR_NAME, opp, playLine, lineText } from './chessutil.js';
 import { describeMotif, describeQuietMove, winningsPhrase, capitalize, explainThreat, MOTIFS } from './explain.js';
 
 const pn = (t) => NAMES[t];
@@ -126,7 +126,7 @@ export function describePlan(plan, { userMove } = {}) {
 
   if (L.mateIdx >= 0) {
     const n = Math.floor(L.mateIdx / 2) + 1;
-    out.push(n === 1 ? `${first.replace('#', '')} is checkmate.` : `${first} starts a forced mate in ${n}: ${first}, then ${narrate(steps.slice(1, L.mateIdx + 1))}.`);
+    out.push(n === 1 ? `${first.replace('#', '')} is checkmate.` : `${first} starts a forced mate in ${n}: ${lineText(steps.slice(0, L.mateIdx + 1))}.`);
     if (L.motif?.type === 'back-rank') out.push('The king is trapped behind its own pawns on the back rank.');
     return out.join(' ');
   }
@@ -151,11 +151,11 @@ export function describePlan(plan, { userMove } = {}) {
       : `${Them}’s best answer is ${num(r1)}, and ${num(S)} still wins ${winningsPhrase(L)}.`);
   } else if (L.gain >= 1 && L.keyIdx === 4) {
     const why = captureReasons(fen, L, 4);
-    out.push(`${Them}’s best answer is ${num(r1)}; then after ${narrate(steps.slice(2, 4)).replace(/, (?=[^,]*$)/, ' and ')}, ${num(steps[4])} wins ${winningsPhrase(L)}${why.length ? ` (${why.join(', and ')})` : ''}.`);
+    out.push(`${Them}’s best answer is ${num(r1)}; then after ${lineText(steps.slice(2, 4))}, ${num(steps[4])} wins ${winningsPhrase(L)}${why.length ? ` (${why.join(', and ')})` : ''}.`);
   } else if (threat && r1) {
     out.push(`${Them}’s best answer is ${num(r1)}.`);
   } else if (steps.length > 1 && !m0 && !(s0.captured && L.keyIdx === 0)) {
-    out.push(`A likely continuation: ${first}, then ${narrate(steps.slice(1, 4))}.`);
+    out.push(`A likely continuation: ${lineText(steps.slice(0, 4))}.`);
   }
 
   if (userMove && userMove !== s0.uci) {

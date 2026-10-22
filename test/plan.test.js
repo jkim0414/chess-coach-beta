@@ -92,6 +92,7 @@ describe('what your move runs into', () => {
     const c = explainConsequence({ fen: BEFORE_NXD4, movePv: r.lines[0].pv, winAfter: winOf(r.lines[0].score) });
     expect(c.text).toMatch(/^Black answers 12\.\.\.Qxd4, taking the knight on d4 — nothing defends it\./);
     expect(c.text).toMatch(/material is level — the pawn wasn’t really free/);
+    expect(c.text).not.toMatch(/\b(White|Black) \d/);
     expect(c.telling).toBe(true);
   }, 60000);
 
@@ -99,7 +100,7 @@ describe('what your move runs into', () => {
     const fen = 'r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3';
     const r = await engine.analyze(fen, { depth: 14, searchmoves: ['f3e5'] });
     const c = explainConsequence({ fen, movePv: r.lines[0].pv, winAfter: winOf(r.lines[0].score) });
-    expect(c.summary).toBe('Black 3...Nxe5: you’ve given a knight for a pawn');
+    expect(c.summary).toBe('3...Nxe5: you’ve given a knight for a pawn');
   }, 60000);
 });
 
