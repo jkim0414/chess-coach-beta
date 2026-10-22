@@ -15,6 +15,7 @@ import { winOf, gradeFromLoss, gameAccuracy, GRADES } from '../lib/evaluation.js
 import { analyzeLine, boardOf, see } from '../lib/tactics.js';
 import { explainMistake, explainThreat, explainConsequence, naiveRecapture, recaptureNote, MOTIFS, materialPhrase, prose } from '../lib/explain.js';
 import { planOf, planSync, describePlan, planHints } from '../lib/plan.js';
+import { contrastMoves } from '../lib/contrast.js';
 import { chooseMove, resolvePersona } from '../lib/opponent.js';
 import { openingOf, bookMovesAt } from '../lib/openings.js';
 import { repertoireAt, COURSES } from '../lib/courses.js';
@@ -567,13 +568,19 @@ export class GameController {
       }
     }
     if (mode !== 'exam' && grade === 'inaccuracy') {
-      // Say what your move runs into, not just what the better move does.
+      // Say what your move runs into, and what the better move does that yours doesn't.
       const cons = explainConsequence({ fen: fenBefore, movePv: line.pv, winAfter: winMove });
       const better = formatLine(fenBefore, [best.san]);
-      if (cons?.telling) this.patchPly(plyIdx, { why: cons.text });
+      const vs = contrastMoves({ fen: fenBefore, playedUci: ply.uci, bestUci: best.uci, playedPv: line.pv, bestPv: lines[0].pv });
+      // Losing material is the headline — unless the better line loses just as much.
+      const bestCons = explainConsequence({ fen: fenBefore, movePv: lines[0].pv, winAfter: winBest });
+      const text = cons && cons.net < 0 && !(bestCons && bestCons.net <= cons.net)
+        ? `${cons.text} Better was ${better}${vs?.why ? `, ${vs.why}` : ''}.` // losing material is the headline
+        : vs?.text || (cons?.telling ? `${cons.text} Better was ${better}.` : `Playable, but ${better} was more precise.`);
+      if (vs || cons?.telling) this.patchPly(plyIdx, { why: text });
       const entry = this.feed({
         tone: 'inaccuracy', title: `${ply.san}?! Inaccuracy`,
-        text: cons?.telling ? `${cons.text} Better was ${better}.` : `Playable, but ${better} was more precise.`,
+        text,
         revealLabel: `What does ${best.san} do?`, reveal: describePlan(planSync(fenBefore, lines[0].pv), { userMove: ply.uci }),
       });
       this.planFor(t).then((plan) => { if (plan) this.updateFeed(entry.id, { reveal: describePlan(plan, { userMove: ply.uci }) }); });

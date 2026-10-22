@@ -7,6 +7,7 @@ import { describeQuietMove } from '../src/lib/explain.js';
 import { GameController, threatCheckApplies, isRealThreat, confirmThreat } from '../src/play/controller.js';
 import { explainThreat, explainConsequence, explainMistake, naiveRecapture, recaptureNote } from '../src/lib/explain.js';
 import { winOf } from '../src/lib/evaluation.js';
+import { contrastMoves } from '../src/lib/contrast.js';
 import { nullMoveFen } from '../src/lib/chessutil.js';
 import * as store from '../src/lib/store.js';
 
@@ -311,4 +312,38 @@ describe('found by the coaching review', () => {
     const m = await engine.analyze(mated, { depth: 12 });
     expect(describePlan(await planOf(engine, mated, m.lines[0].pv, { opponentThreat: true }))).toMatch(/forced mate whatever you play/);
   }, 60000);
+});
+
+describe('contrasting your move with the better one', () => {
+  const AFTER_NF3 = 'rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2';
+
+  it('says what both moves do, what the better one also does, and what yours costs', () => {
+    // 2...f6 and 2...Nc6 both defend e5, but f6 takes the knight's square and, after
+    // 3.Nxe5 fxe5 4.Qh5+ Ke7, costs Black castling.
+    const vs = contrastMoves({ fen: AFTER_NF3, playedUci: 'f7f6', bestUci: 'b8c6', playedPv: ['f7f6', 'f3e5', 'f6e5', 'd1h5', 'e8e7'], bestPv: ['b8c6', 'f1b5'] });
+    expect(vs.text).toBe('Both 2...f6 and 2...Nc6 deal with the attack on your pawn on e5. 2...Nc6 also develops the knight, while 2...f6 takes f6 away from your knight on g8 and costs you the right to castle (4.Qh5+ Ke7).');
+    expect(vs.why).toBe('which deals with the attack on your pawn on e5 and develops the knight');
+  });
+
+  it('calls a capture that is taken back a trade, not a hanging piece', () => {
+    // 9.Bxf6 exf6 is a trade; the cost is the bishop pair, and 9.Nc3 develops with an attack on the queen.
+    const fen = 'r3kb1r/pp2pppp/2n1bn2/2pq4/8/1P2PN2/PB1P1PPP/RN1QKB1R w KQkq - 0 9';
+    const vs = contrastMoves({ fen, playedUci: 'b2f6', bestUci: 'b1c3', playedPv: ['b2f6', 'e7f6', 'b1c3', 'd5d7'], bestPv: ['b1c3', 'd5d7'] });
+    expect(vs.text).not.toMatch(/hanging/);
+    expect(vs.text).toMatch(/^9\.Nc3 develops the knight and attacks the queen on d5/);
+  });
+
+  it('says a piece was left hanging only if the engine’s line really takes it', () => {
+    const fen = 'r4rk1/1q4pp/p1b1p3/1pR1p3/4p1PP/P3Q3/1PP1BP2/3RK3 b - - 3 21';
+    // Taking on e5 is the engine's answer: then it's a real cost of 21...Rac8.
+    const taken = contrastMoves({ fen, playedUci: 'a8c8', bestUci: 'c6d5', playedPv: ['a8c8', 'c5e5', 'c8c2'] });
+    expect(taken.text).toBe('21...Bd5 deals with the attack on your pawn on e5, while 21...Rac8 leaves your pawn on e5 hanging.');
+    // The engine prefers 22.c4 (22.Rxe5 would be bad for White): no such claim.
+    const notTaken = contrastMoves({ fen, playedUci: 'a8c8', bestUci: 'c6d5', playedPv: ['a8c8', 'c2c4', 'b5c4'] });
+    expect(notTaken?.text || '').not.toMatch(/hanging|deals with the attack/);
+  });
+
+  it('says nothing when there is nothing concrete to say', () => {
+    expect(contrastMoves({ fen: 'rnbqkbnr/pp1ppppp/2p5/8/2P5/8/PP1PPPPP/RNBQKBNR w KQkq - 0 2', playedUci: 'g1h3', bestUci: 'b1c3' })).toBe(null);
+  });
 });

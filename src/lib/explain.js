@@ -304,17 +304,19 @@ export function positionalReasons(fen0, fen1, me) {
     }
     return n;
   };
-  if (shelter(B1) <= shelter(B0) - 2) out.push('your king loses most of its pawn cover');
+  // (Only comparable if the king is on the same square in both positions.)
+  const kingAt = (B) => [...B].find(([, p]) => p.type === 'k' && p.color === me)?.[0];
+  if (kingAt(B0) === kingAt(B1) && shelter(B1) <= shelter(B0) - 2) out.push('your king loses most of its pawn cover');
   const passedFiles = (B) => [...B].filter(([s2, p]) => p.type === 'p' && p.color === them && isPassed(B, s2, them)).map(([s2]) => s2[0]);
   const newPassed = passedFiles(B1).filter((f) => !passedFiles(B0).includes(f));
   if (newPassed.length) out.push(`${Them} gets a passed pawn on the ${newPassed[0]}-file`);
   return out;
 }
 
-const joinAnd = (xs) => (xs.length <= 1 ? xs[0] || '' : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
+export const joinAnd = (xs) => (xs.length <= 1 ? xs[0] || '' : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
 
 /** Where a line "settles": the first quiet point after which material stops changing. */
-function settle(fen, pv) {
+export function settle(fen, pv) {
   const U = analyzeLine(fen, pv, 14);
   // A check isn't a resting point: the combination usually goes on.
   const settled = U.stables.filter((i) => i >= 1 && i <= 11 && !U.steps[i].check);
@@ -368,7 +370,7 @@ export function explainConsequence({ fen, movePv, winAfter }) {
   if (costs.length) sentences.push(`But ${joinAnd(costs)}.`);
   else if (net >= 0 && winAfter < 0.42) sentences.push(`${Them} also gets the more comfortable position.`);
   const summary = `${lineText(st.slice(1, end + 1))}: ${outcome}${costs.length ? `, but ${joinAnd(costs)}` : ''}`;
-  return { text: sentences.join(' '), summary, net, g0, costs, telling: net !== g0 || net < 0 || costs.length > 0 };
+  return { text: sentences.join(' '), summary, net, g0, costs, telling: net < 0 || net < g0 || costs.length > 0 }; // (coming out ahead isn't a reason a move was worse)
 }
 
 const COUNT = ['', 'a', 'two', 'three', 'four', 'five'];

@@ -170,5 +170,17 @@ describe('GameController', () => {
     const titles = again.feed.map((f) => f.title);
     expect(new Set(titles).size).toBe(titles.length);
   }, 60000);
+  it('an inaccuracy note says what the better move does that yours doesn’t', async () => {
+    const c = new GameController({ engine, oppDelay: 0, rng: () => 0.3 });
+    // 7.exd5 just trades; 7.e5 gains time on the f6 knight.
+    c.start(config({ fen: 'rnb1k2r/pp2ppbp/1qp2np1/3p4/P3P3/3P2P1/1PPNQP1P/R1B1KBNR w KQkq - 1 7' }));
+    await waitFor(c, (s) => s.analysisReady);
+    move(c, 'e4d5');
+    const s = await waitFor(c, (st) => st.feed.some((f) => f.tone === 'inaccuracy'));
+    expect(s.plies[0].grade).toBe('inaccuracy');
+    const note = s.feed.find((f) => f.tone === 'inaccuracy');
+    expect(note.text).toBe('7.e5 was more precise: it attacks the knight on f6.');
+    expect(s.plies[0].why).toBe(note.text);
+  }, 60000);
 });
 
