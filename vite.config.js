@@ -11,4 +11,9 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['stockfish'],
   },
+  build: {
+    // The opening courses, book and name database are bundled on purpose (~150 kB gzip);
+    // they're tiny next to the 7 MB engine and keep the app fully offline-capable.
+    chunkSizeWarningLimit: 1200,
+  },
 })
