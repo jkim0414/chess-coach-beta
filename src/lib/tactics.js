@@ -245,7 +245,9 @@ export function analyzeLine(fen, pv, maxPlies = 12) {
   const steps = playLine(fen, pv, maxPlies);
   const mat0 = materialBalance(fen, side);
   const mats = steps.map((s) => materialBalance(s.fenAfter, side) - mat0);
-  const mateIdx = steps.findIndex((s) => s.mate);
+  // Only a mate delivered by `side` is a win for it; the other side mating is a loss.
+  const mateIdx = steps.findIndex((s) => s.mate && s.color === side);
+  const matedIdx = steps.findIndex((s) => s.mate && s.color !== side);
 
   // Only trust material at points where the line pauses (the next move isn't a capture).
   // The line "wins" the best such count, banked at the earliest pause that reaches it —
@@ -261,7 +263,7 @@ export function analyzeLine(fen, pv, maxPlies = 12) {
   }
   const best = stables.length ? Math.max(...stables.map((i) => mats[i])) : 0;
   const bankedAt = stables.find((i) => mats[i] >= best - 0.5);
-  const gain = mateIdx >= 0 ? 99 : stables.length ? mats[bankedAt] : 0;
+  const gain = mateIdx >= 0 ? 99 : matedIdx >= 0 ? -99 : stables.length ? mats[bankedAt] : 0;
 
   // The ply at which the gain is banked must be one of our moves.
   let keyIdx = 0;

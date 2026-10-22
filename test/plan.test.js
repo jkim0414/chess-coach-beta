@@ -131,3 +131,26 @@ describe('threats and reasons must be caused by the line', () => {
   });
 });
 
+describe('mates belong to the side that gives them', () => {
+  // Reported from play: "Black threatens mate: 36...f5 37.Re7+ ... 40.Qxg5#" — the mate in
+  // that line was White's (the player's own), found while asking what Black threatens.
+  const WON = '4Q3/B4p1k/6p1/7p/p1P5/1P3Q2/P4PPP/3RR1K1 w - - 0 36';
+
+  it('does not report the player’s own mate as the opponent’s threat', async () => {
+    const res = await engine.analyze(nullMoveFen(WON), { depth: 12 });
+    const th = explainThreat(WON, res.lines[0].pv);
+    expect(th?.mate ?? false).toBe(false);
+    expect(isRealThreat(th)).toBe(false);
+  }, 60000);
+
+  it('scores a line where the other side mates as a loss', async () => {
+    const { analyzeLine } = await import('../src/lib/tactics.js');
+    // The line from the report: 36...f5 37.Re7+ Kh6 38.Be3+ f4 39.Qxf4+ g5 40.Qxg5#
+    const L = analyzeLine(nullMoveFen(WON), ['f7f5', 'e1e7', 'h7h6', 'a7e3', 'f5f4', 'f3f4', 'g6g5', 'f4g5']);
+    expect(L.steps).toHaveLength(8);
+    expect(L.steps[7].mate).toBe(true);
+    expect(L.mateIdx).toBe(-1);
+    expect(L.gain).toBeLessThan(0);
+  });
+});
+
