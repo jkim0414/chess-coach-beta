@@ -5,7 +5,7 @@ import { planOf, planSync, describePlan, planHints } from '../src/lib/plan.js';
 import { motifsOfMove } from '../src/lib/tactics.js';
 import { describeQuietMove } from '../src/lib/explain.js';
 import { GameController, threatCheckApplies, isRealThreat } from '../src/play/controller.js';
-import { explainThreat, explainConsequence } from '../src/lib/explain.js';
+import { explainThreat, explainConsequence, explainMistake } from '../src/lib/explain.js';
 import { winOf } from '../src/lib/evaluation.js';
 import { nullMoveFen } from '../src/lib/chessutil.js';
 import * as store from '../src/lib/store.js';
@@ -168,5 +168,40 @@ describe('threat wording', () => {
     expect(th.squares).toEqual(expect.arrayContaining(['g7', 'h7']));
     expect(isRealThreat(th)).toBe(true);
   }, 60000);
+});
+
+describe('positional mistakes', () => {
+  // Reported from play: "you go from about equal to about equal" for 9.Re1, which lets
+  // ...Nxc4 double your pawns and hand Black the bishop pair.
+  const BEFORE_RE1 = 'r1bq1rk1/ppp2ppp/1nn5/2b1p3/2B5/2PP1N1P/PP3PP1/RNBQ1RK1 w - - 1 9';
+
+  it('names the concrete positional cost and the evaluation change', async () => {
+    const fresh = createNodeEngine(); // a fresh hash keeps the engine's line reproducible
+    const best = await fresh.analyze(BEFORE_RE1, { depth: 16 });
+    const mine = await fresh.analyze(BEFORE_RE1, { depth: 16, searchmoves: ['f1e1'] });
+    fresh.terminate();
+    const ex = explainMistake({ fen: BEFORE_RE1, uci: 'f1e1', movePv: mine.lines[0].pv, winBefore: winOf(best.lines[0].score), winAfter: winOf(mine.lines[0].score) });
+    expect(ex.why).toMatch(/^It doesn’t lose material, but after 9\.\.\.Nxc4 10\.dxc4/);
+    expect(ex.why).toMatch(/doubled on the c-file/);
+    expect(ex.why).toMatch(/Black gets the bishop pair/);
+    expect(ex.why).toMatch(/evaluation goes from [+−]?\d\.\d to −\d\.\d/);
+    expect(ex.why).not.toMatch(/about equal to about equal/);
+  }, 60000);
+});
+
+describe('pins', () => {
+  it('does not call it a pin when the pinned piece can take the pinner', async () => {
+    const { motifsOfMove } = await import('../src/lib/tactics.js');
+    const { playLine } = await import('../src/lib/chessutil.js');
+    // 9.Re1 Nxc4 10.dxc4 — now ...Qxd1 "pins" the e1 rook, which just takes the queen.
+    const steps = playLine('r1bq1rk1/ppp2ppp/1nn5/2b1p3/2B5/2PP1N1P/PP3PP1/RNBQ1RK1 w - - 1 9', ['f1e1', 'b6c4', 'd3c4']);
+    expect(steps).toHaveLength(3);
+    const fen = steps[2].fenAfter;
+    const ms = motifsOfMove(fen, 'd8d1');
+    expect(ms.length).toBeGreaterThanOrEqual(0);
+    expect(ms.map((m) => m.type)).not.toContain('pin');
+    // …while a real pin is still found (Bb5 pinning the c6 knight to the king).
+    expect(motifsOfMove('r1bqkbnr/ppp2ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 0 4', 'f1b5').map((m) => m.type)).toContain('pin');
+  });
 });
 

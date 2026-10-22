@@ -3,7 +3,6 @@
 import { Chess } from 'chess.js';
 import { NAMES, VALUES, COLOR_NAME, formatLine, opp, turnOf, playLine, coords, nullMoveFen, lineText } from './chessutil.js';
 import { analyzeLine, boardOf, hangingPieces, see, threatsBy, attackersOf, attacksFrom } from './tactics.js';
-import { verdict } from './evaluation.js';
 
 export const MOTIFS = {
   fork: { name: 'Fork', hint: 'Look for one move that attacks two things at once.', theme: 'fork' },
@@ -158,13 +157,86 @@ export function explainMistake({ fen, uci, movePv, winBefore, winAfter }) {
     };
   }
 
+  const { U, end } = settle(fen, movePv || [uci]);
+  const costs = end >= 1 && U.steps[end] ? positionalReasons(fen, U.steps[end].fenAfter, side) : [];
+  const evals = `the evaluation goes from ${evalText(winBefore)} to ${evalText(winAfter)}`;
+  if (costs.length && end >= 1) {
+    return {
+      why: `It doesn’t lose material, but after ${lineText(U.steps.slice(1, end + 1))}, ${joinAnd(costs)} (${evals}).`,
+      refutation: '', motif: null, kind: 'positional',
+    };
+  }
   return {
-    why: `It isn’t a tactical oversight, but it hands ${T} the better game — you go from ${verdict(winBefore)} to ${verdict(winAfter)}.`,
+    why: `It doesn’t lose material, but it gives ${T} the easier game: ${evals}.`,
     refutation, motif: null, kind: 'positional',
   };
 }
 
 const times = (n) => (n === 1 ? 'once' : n === 2 ? 'twice' : `${n} times`);
+
+/** Expected score → "+0.4" / "−1.3" in pawns (inverse of the logistic model). */
+function evalText(w) {
+  const c = Math.min(0.999, Math.max(0.001, w));
+  const pawns = Math.log(c / (1 - c)) / 0.00368208 / 100;
+  if (Math.abs(pawns) < 0.05) return '0.0';
+  return (pawns > 0 ? '+' : '−') + Math.abs(pawns).toFixed(1);
+}
+
+function pawnFiles(B, color) {
+  const files = {};
+  for (const [s, p] of B) if (p.type === 'p' && p.color === color) files[s[0]] = (files[s[0]] || 0) + 1;
+  return files;
+}
+const FILE_ORDER = 'abcdefgh';
+
+/**
+ * Concrete positional costs of going from fen0 to fen1, for `me`: doubled or isolated
+ * pawns, losing the bishop pair, a stripped king, an enemy passed pawn.
+ */
+export function positionalReasons(fen0, fen1, me) {
+  const B0 = boardOf(fen0), B1 = boardOf(fen1);
+  const them = opp(me), Them = COLOR_NAME[them];
+  const out = [];
+  const f0 = pawnFiles(B0, me), f1 = pawnFiles(B1, me);
+  const doubled = Object.keys(f1).filter((f) => f1[f] >= 2 && !(f0[f] >= 2));
+  if (doubled.length) out.push(`your pawns end up doubled on the ${doubled[0]}-file`);
+  const isolated = (files) => Object.keys(files).filter((f) => {
+    const i = FILE_ORDER.indexOf(f);
+    return !files[FILE_ORDER[i - 1]] && !files[FILE_ORDER[i + 1]];
+  });
+  const iso = isolated(f1).filter((f) => !isolated(f0).includes(f));
+  if (iso.length) out.push(`you’re left with an isolated pawn on the ${iso[0]}-file`);
+  const bishops = (B, c) => [...B.values()].filter((p) => p.type === 'b' && p.color === c).length;
+  if (bishops(B0, me) >= 2 && bishops(B1, me) < 2 && bishops(B1, them) >= 2) out.push(`${Them} gets the bishop pair`);
+  const shelter = (B) => {
+    const k = [...B].find(([, p]) => p.type === 'k' && p.color === me)?.[0];
+    if (!k) return 0;
+    const [kf, kr] = coords(k);
+    const dir = me === 'w' ? 1 : -1;
+    let n = 0;
+    for (let df = -1; df <= 1; df++) for (const dr of [1, 2]) {
+      const p = B.get(FILE_ORDER[kf + df] + (kr + dr * dir));
+      if (p?.type === 'p' && p.color === me) n++;
+    }
+    return n;
+  };
+  if (shelter(B1) <= shelter(B0) - 2) out.push('your king loses most of its pawn cover');
+  const passedFiles = (B) => [...B].filter(([s2, p]) => p.type === 'p' && p.color === them && isPassed(B, s2, them)).map(([s2]) => s2[0]);
+  const newPassed = passedFiles(B1).filter((f) => !passedFiles(B0).includes(f));
+  if (newPassed.length) out.push(`${Them} gets a passed pawn on the ${newPassed[0]}-file`);
+  return out;
+}
+
+const joinAnd = (xs) => (xs.length <= 1 ? xs[0] || '' : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
+
+/** Where a line "settles": the first quiet point after which material stops changing. */
+function settle(fen, pv) {
+  const U = analyzeLine(fen, pv, 12);
+  const settled = U.stables.filter((i) => i >= 1 && i <= 7);
+  const last = settled.length ? settled[settled.length - 1] : Math.min(1, U.steps.length - 1);
+  const end = settled.find((i) => U.mats.slice(i, last + 1).every((m) => m === U.mats[last])) ?? last;
+  return { U, end };
+}
 
 /**
  * What the move just played runs into, following the engine's line after it: the
@@ -173,15 +245,11 @@ const times = (n) => (n === 1 ? 'once' : n === 2 ? 'twice' : `${n} times`);
  * Returns { text, summary } or null. Written for the player who made the move ("you").
  */
 export function explainConsequence({ fen, movePv, winAfter }) {
-  const U = analyzeLine(fen, movePv, 12);
+  const { U, end } = settle(fen, movePv);
   const st = U.steps;
-  if (st.length < 2) return null;
+  if (st.length < 2 || end < 1) return null;
   const me = U.side;
   const Them = COLOR_NAME[opp(me)];
-  // Follow the line to the first quiet point after which the material no longer changes.
-  const settled = U.stables.filter((i) => i >= 1 && i <= 7);
-  const last = settled.length ? settled[settled.length - 1] : 1;
-  const end = settled.find((i) => U.mats.slice(i, last + 1).every((m) => m === U.mats[last])) ?? last;
   const g0 = U.mats[0];
   const net = U.mats[end];
   const r1 = st[1];
@@ -204,8 +272,11 @@ export function explainConsequence({ fen, movePv, winAfter }) {
   const sentences = [`${reply}.`];
   if (end >= 2) sentences.push(`After ${lineText(st.slice(2, end + 1))}, ${outcome}${notFree}.`);
   else if (net !== g0 || net < 0) sentences.push(`${capitalize(outcome)}${notFree}.`);
-  if (net >= 0 && winAfter < 0.42) sentences.push(`${Them} also gets the more comfortable position.`);
-  return { text: sentences.join(' '), summary: `${lineText(st.slice(1, end + 1))}: ${outcome}`, net, g0, telling: !!r1.captured || net !== g0 };
+  const costs = net >= 0 ? positionalReasons(fen, st[end].fenAfter, me) : [];
+  if (costs.length) sentences.push(`But ${joinAnd(costs)}.`);
+  else if (net >= 0 && winAfter < 0.42) sentences.push(`${Them} also gets the more comfortable position.`);
+  const summary = `${lineText(st.slice(1, end + 1))}: ${outcome}${costs.length ? `, but ${joinAnd(costs)}` : ''}`;
+  return { text: sentences.join(' '), summary, net, g0, costs, telling: !!r1.captured || net !== g0 || costs.length > 0 };
 }
 
 const COUNT = ['', 'a', 'two', 'three', 'four', 'five'];

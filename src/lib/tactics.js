@@ -137,7 +137,9 @@ export function linesThrough(B, from) {
         } else {
           if (p.color !== me.color) {
             const second = { square: s, piece: p };
-            if (p.type === 'k' && first.piece.type !== 'k') out.push({ type: 'pin', absolute: true, pinned: first, behind: second });
+            // A "pinned" piece that can simply take the pinner isn't really pinned.
+            if (attacksFrom(B, first.square).includes(from)) { /* not a pin worth naming */ }
+            else if (p.type === 'k' && first.piece.type !== 'k') out.push({ type: 'pin', absolute: true, pinned: first, behind: second });
             else if (!attackerSafe && first.piece.type !== 'k') { /* the front piece can just take the attacker */ }
             else if (first.piece.type === 'k' || SEE_VAL[first.piece.type] > SEE_VAL[p.type]) {
               if (first.piece.type === 'k' || (see(B, first.square, me.color, from) ?? 0) > 0 || SEE_VAL[first.piece.type] > SEE_VAL[me.type])

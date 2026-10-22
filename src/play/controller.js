@@ -550,7 +550,7 @@ export class GameController {
     // "What happens next" follows the line until the material settles, so a piece you can win
     // straight back doesn't read like a piece lost.
     const cons = explainConsequence({ fen: t.fen, movePv: ev.line.pv, winAfter: ev.winMove });
-    if (cons) ex.refutation = cons.summary;
+    if (cons && ex.kind !== 'positional') ex.refutation = cons.summary; // positional notes already walk the line
     const T = COLOR_NAME[opp(this.s.userColor)];
     const alsoBad = ev.grade === 'mistake' || ev.grade === 'blunder';
     const lower = (x) => (x ? x[0].toLowerCase() + x.slice(1) : x);
