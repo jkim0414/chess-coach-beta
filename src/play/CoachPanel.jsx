@@ -63,7 +63,7 @@ function Callout({ s, c }) {
         <div className="callout-kicker">{decide ? 'Hold on' : 'Your turn again'}</div>
         <h3>{a.title}</h3>
         {decide && <p>{a.why}</p>}
-        {decide && a.refutation && <p className="line">Punishment: <span>{a.refutation}</span></p>}
+        {decide && a.refutation && <p className="refutation">What happens next: <span>{a.refutation}</span></p>}
         {!decide && <p>{a.reason === 'repertoire' ? 'Play your repertoire move.' : a.reason === 'missed' ? 'Find the strongest move.' : 'Find a better move.'}</p>}
         {a.retryNote && <p className="retry-note">{a.retryNote}</p>}
         {a.hintText && <p className="hint-text">💡 {a.hintText}</p>}

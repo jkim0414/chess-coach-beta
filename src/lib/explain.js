@@ -1,8 +1,8 @@
 // The coach's words. Everything here is derived from concrete board facts
 // (attack maps, exchanges, engine lines) so explanations stay truthful.
 import { Chess } from 'chess.js';
-import { NAMES, VALUES, COLOR_NAME, formatLine, opp, turnOf, playLine, coords, nullMoveFen } from './chessutil.js';
-import { analyzeLine, boardOf, hangingPieces, see, threatsBy, attackersOf } from './tactics.js';
+import { NAMES, VALUES, COLOR_NAME, formatLine, opp, turnOf, playLine, coords, nullMoveFen, narrate } from './chessutil.js';
+import { analyzeLine, boardOf, hangingPieces, see, threatsBy, attackersOf, attacksFrom } from './tactics.js';
 import { verdict } from './evaluation.js';
 
 export const MOTIFS = {
@@ -30,7 +30,7 @@ export function materialPhrase(gain) {
   if (gain >= 8) return 'about a queen’s worth of material';
   if (gain >= 5) return 'a rook’s worth of material';
   if (gain >= 3) return 'a piece';
-  if (gain === 2) return 'the exchange or two pawns';
+  if (gain === 2) return 'about two pawns’ worth of material';
   if (gain >= 1) return 'a pawn';
   return 'nothing';
 }
@@ -43,9 +43,11 @@ export function winningsPhrase(L) {
     if (!s.captured) return;
     (s.color === L.side ? ours : theirs).push({ type: s.captured, square: s.to });
   });
-  if (ours.length === 1 && theirs.length === 0 && ours[0].type !== 'p') return `the ${pn(ours[0].type)} on ${ours[0].square}`;
+  if (ours.length === 1 && theirs.length === 0) return ours[0].type === 'p' ? `the pawn on ${ours[0].square}` : `the ${pn(ours[0].type)} on ${ours[0].square}`;
   const top = ours.sort((a, b) => VALUES[b.type] - VALUES[a.type])[0];
   if (top && theirs.length === 1 && top.type === 'r' && ['n', 'b'].includes(theirs[0].type)) return 'the exchange';
+  const pawns = ours.filter((x) => x.type === 'p').length - theirs.filter((x) => x.type === 'p').length;
+  if (L.gain === 2 && pawns >= 2) return 'two pawns';
   return materialPhrase(L.gain);
 }
 
@@ -120,7 +122,7 @@ export function explainMistake({ fen, uci, movePv, winBefore, winAfter }) {
   const R = analyzeLine(mv.fenAfter, reply, 10);
   const r0 = R.steps[0];
   const refShowTo = R.mateIdx >= 0 ? R.mateIdx + 1 : Math.min(R.steps.length, Math.max(R.keyIdx + 1, 1));
-  const refutation = r0 ? formatLine(mv.fenAfter, R.steps.slice(0, refShowTo).map((s) => s.san)) : '';
+  const refutation = r0 ? narrate(R.steps.slice(0, refShowTo)) : '';
   const yourMove = prose(mv.color, mv.san);
   const T = them(side);
 
@@ -172,7 +174,7 @@ export function explainThreat(fen, nullPv) {
   const s0 = L.steps[0];
   const first = prose(s0.color, s0.san);
   const showTo = L.mateIdx >= 0 ? L.mateIdx + 1 : Math.max(1, Math.min(L.keyIdx + 1, 3));
-  const line = formatLine(nf, L.steps.slice(0, showTo).map((s) => s.san));
+  const line = narrate(L.steps.slice(0, showTo));
 
   const squares = new Set([s0.from, s0.to]);
   L.steps.slice(0, (L.keyIdx || 0) + 1).forEach((s) => { if (s.color === L.side && s.captured) squares.add(s.to); });
@@ -257,7 +259,7 @@ export function describeQuietMove(fen, uci) {
     if ((r.to[0] === 'd' || r.to[0] === 'e') && (rel === 4 || rel === 5)) return `claims the centre with a pawn on ${r.to}`;
     if (moveNo <= 12 && (r.to[0] === 'c' || r.to[0] === 'f')) return `supports the fight for the centre from the ${r.to[0]}-file`;
     if (rel >= 5 && kingSideOfFile(after, opp(side), f)) return `starts a pawn storm against the enemy king`;
-    return `pushes the pawn to ${r.to}`;
+    return pawnPurpose(before, after, r, side);
   }
   if ((r.piece === 'n' || r.piece === 'b') && moveNo <= 15) {
     const backRank = side === 'w' ? '1' : '8';
@@ -277,6 +279,38 @@ export function describeQuietMove(fen, uci) {
   if (r.piece === 'k' && countPieces(after) <= 12) return 'activates the king — in the endgame it’s a fighting piece';
   if (r.piece === 'q' && moveNo <= 8) return `brings the queen to ${r.to}`;
   return `improves the ${pn(r.piece)} on ${r.to}`;
+}
+
+/** What a quiet pawn move is for, in order of how much it usually matters. */
+function pawnPurpose(before, after, r, side) {
+  const them = opp(side);
+  const Them = COLOR_NAME[them];
+  const covers = attacksFrom(after, r.to);
+  // 1. It supports a piece that's being attacked or challenged.
+  for (const sq of covers) {
+    const p = after.get(sq);
+    if (!p || p.color !== side || p.type === 'p' || p.type === 'k') continue;
+    const by = attackersOf(after, sq, them);
+    if (!by.length) continue;
+    const a = by.map((x) => ({ sq: x, p: after.get(x) })).sort((x, y) => VALUES[x.p.type] - VALUES[y.p.type])[0];
+    return `supports the ${pn(p.type)} on ${sq}, which ${Them}’s ${pn(a.p.type)} on ${a.sq} is ${VALUES[a.p.type] >= VALUES[p.type] ? 'challenging' : 'attacking'}`;
+  }
+  // 2. It opens a line for one of your long-range pieces.
+  for (const [sq, p] of after) {
+    if (p.color !== side || !['b', 'q', 'r'].includes(p.type)) continue;
+    // The pawn was blocking this piece's line, which now runs on through the vacated square.
+    const gained = attacksFrom(after, sq).filter((x) => !attacksFrom(before, sq).includes(x));
+    if (gained.length && attacksFrom(after, sq).includes(r.from)) return `opens the way for your ${pn(p.type)} on ${sq} (it can now use ${[r.from, ...gained].slice(0, 2).join(' and ')})`;
+  }
+  // 3. It gives the king an escape square.
+  const k = [...after].find(([, p]) => p.type === 'k' && p.color === side)?.[0];
+  if (k && attacksFrom(after, k).includes(r.from) && Math.abs(coords(k)[0] - coords(r.from)[0]) <= 1) {
+    return `gives your king an escape square on ${r.from}${covers.length ? ` and keeps ${Them}’s pieces off ${covers.join(' and ')}` : ''}`;
+  }
+  // 4. It takes squares away from enemy pieces.
+  const denied = covers.filter((sq) => [...after].some(([s2, p]) => p.color === them && ['n', 'b', 'q'].includes(p.type) && attacksFrom(after, s2).includes(sq) && !after.get(sq)));
+  if (denied.length) return `takes ${denied.join(' and ')} away from ${Them}’s pieces`;
+  return `gains space on the ${r.to[0]}-file and covers ${covers.join(' and ')}`;
 }
 
 function isPassed(B, square, side) {

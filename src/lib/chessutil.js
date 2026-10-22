@@ -110,3 +110,17 @@ export function gamePhase(game) {
 export function pieceLabel(p, square) {
   return `${NAMES[p.type]} on ${square}`;
 }
+
+/**
+ * A line in words, with every move attributed: "Black castles (11...O-O), White 12.a4,
+ * Black 12...Re8". Bare notation ("11.b3 O-O 12.a4") leaves readers guessing whose move is whose.
+ */
+export function narrate(steps) {
+  return steps.map((s) => {
+    const who = COLOR_NAME[s.color];
+    const n = formatLine(s.fenBefore, [s.san]);
+    if (s.san.startsWith('O-O-O')) return `${who} castles queenside (${n})`;
+    if (s.san.startsWith('O-O')) return `${who} castles (${n})`;
+    return `${who} ${n}`;
+  }).join(', ');
+}

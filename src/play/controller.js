@@ -37,6 +37,22 @@ let feedSeq = 0;
 const fidBase = Date.now().toString(36);
 const fid = () => `f${fidBase}-${++feedSeq}`;
 
+/**
+ * Should we quiz "what is the opponent threatening?" here? Not straight after they captured
+ * something — the question then is whether to take back, not what the threat is.
+ */
+export function threatCheckApplies(lastPly) {
+  return !(lastPly && lastPly.by === 'opp' && lastPly.san.includes('x'));
+}
+
+/**
+ * Is this a threat worth asking about? Only a direct one: a capture next move that wins
+ * real material, or mate. ("If you passed, they'd retreat and win something later" isn't.)
+ */
+export function isRealThreat(th) {
+  return !!th && (th.mate || (th.gain >= 2 && !!th.move.captured));
+}
+
 export function detectMoment(fen, lines, oppLoss = 0) {
   if (!lines?.length || !lines[1]) return null; // a forced move is not a "moment"
   const best = lines[0];
@@ -116,6 +132,7 @@ export class GameController {
       const raw = storage()?.getItem(LIVE_KEY);
       if (!raw) return null;
       const g = JSON.parse(raw);
+      if (!g.plies?.length) return null;
       return { personaName: resolvePersona(g.config.personaId, g.config.custom).name, moves: g.plies.length, savedAt: g.savedAt };
     } catch { return null; }
   }
@@ -281,7 +298,7 @@ export class GameController {
     this.set({ turn: 'user', thinking: false, grading: false, analysisReady: false, opening, active: null, arrows: [], marks: {} });
 
     // 1) Threat awareness. Runs first and briefly locks the board, so the question comes before the move.
-    if (config.threatPrompts && config.coachMode !== 'exam' && plies.length > 1 && !this.chess.isCheck() && this.s.active?.kind !== 'drill') {
+    if (config.threatPrompts && config.coachMode !== 'exam' && plies.length > 1 && !this.chess.isCheck() && threatCheckApplies(plies[plies.length - 1])) {
       const nf = nullMoveFen(fen);
       if (nf) {
         this.set({ locked: true });
@@ -290,7 +307,7 @@ export class GameController {
         this.set({ locked: false });
         const th = res?.lines[0] ? explainThreat(fen, res.lines[0].pv) : null;
         // Ask once per position per game (a take-back returns to positions already asked about).
-        if (th && (th.mate || th.gain >= 2) && !this.threatsAsked.has(epd(fen)) && this.shouldAskThreat()) {
+        if (isRealThreat(th) && !this.threatsAsked.has(epd(fen)) && this.shouldAskThreat()) {
           this.threatsAsked.add(epd(fen));
           t.threat = th;
           this.set({ active: { kind: 'threat', state: 'asking', threat: th, color: opp(userColor) } });
@@ -630,8 +647,19 @@ export class GameController {
     if (t.gen !== this.gen) return;
     if (ev?.line) this.patchPly(plyIdx, { grade: a.reason === 'repertoire' ? 'book' : ev.grade, loss: ev.loss, winAfter: ev.winMove, winBefore: ev.winBest, scoreAfter: ev.line.score, best: { uci: ev.lines[0].pv[0], san: uciToSan(t.fen, ev.lines[0].pv[0]) } });
     const explain = a.reason === 'repertoire' ? (t.rep.move.note || '') : ev?.line ? describePlan(planSync(t.fen, ev.line.pv)) : '';
+    // When several moves were fine, say so: the lesson is the problem they all solve, not one magic move.
+    const lines = t.result?.lines || [];
+    const others = a.reason === 'repertoire' || !lines.length ? [] : lines
+      .filter((l) => l.pv[0] !== uci && winOf(lines[0].score) - winOf(l.score) <= 0.05)
+      .map((l) => formatLine(t.fen, [uciToSan(t.fen, l.pv[0])]));
+    const also = others.length ? ` Also good here: ${others.join(', ')}.` : '';
     this.set({ active: null, arrows: [] });
-    this.feed({ tone: 'best', title: `${san} — that’s it`, text: explain, actions: a.reason === 'missed' ? practise(a.motif) : undefined });
+    const entry = this.feed({ tone: 'best', title: `${san} — that’s it`, text: explain + also, actions: a.reason === 'missed' ? practise(a.motif) : undefined });
+    if (a.reason !== 'repertoire' && ev?.line) {
+      planOf(this.engine, t.fen, ev.line.pv, { opponentThreat: true }).then((plan) => {
+        if (plan) this.updateFeed(entry.id, { text: describePlan(plan) + also });
+      });
+    }
     if (a.reason === 'missed' && ev?.line) {
       const L = analyzeLine(t.fen, ev.line.pv, 12);
       if ((L.mateIdx >= 0 ? L.mateIdx : L.keyIdx) >= 2) { this.startDrill(t, L); return; }

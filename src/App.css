@@ -401,3 +401,5 @@ td .result, .lede .result { font-size: inherit; }
 .lesson-prev b { color: var(--text-strong); font-family: var(--mono); }
 .explain { display: flex; flex-direction: column; gap: 8px; font-size: 14px; }
 .explain b { color: var(--text-strong); }
+.refutation { font-size: 13.5px; color: var(--text-dim); }
+.refutation span { color: var(--text-strong); }

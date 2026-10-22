@@ -4,7 +4,9 @@ import { createNodeEngine } from './nodeWorker.js';
 import { planOf, describePlan, planHints } from '../src/lib/plan.js';
 import { motifsOfMove } from '../src/lib/tactics.js';
 import { describeQuietMove } from '../src/lib/explain.js';
-import { GameController } from '../src/play/controller.js';
+import { GameController, threatCheckApplies, isRealThreat } from '../src/play/controller.js';
+import { explainThreat } from '../src/lib/explain.js';
+import { nullMoveFen } from '../src/lib/chessutil.js';
 import * as store from '../src/lib/store.js';
 
 const FEN = 'r1b2rk1/1pppnpp1/3q3p/p1b1p1BQ/2BnP2N/2NPR3/PPP2PPP/5RK1 w - - 0 12';
@@ -58,3 +60,24 @@ describe('grading near-equal moves', () => {
     expect(s.feed.some((f) => f.tone === 'inaccuracy')).toBe(false);
   }, 60000);
 });
+
+describe('threat check', () => {
+  // Reported from play: after 15...Bxc4 the coach asked "what is Black threatening?" and
+  // answered "…Be6, winning the exchange or two pawns" — but the move was just to take back.
+  const AFTER_BXC4 = 'r2q1rk1/bpp2pp1/p1np1n1p/4p3/PPb1P3/2PP1NNP/3B1PP1/R2QR1K1 w - - 0 16';
+
+  it('is skipped right after the opponent captures (the question is whether to take back)', () => {
+    expect(threatCheckApplies({ by: 'opp', san: 'Bxc4' })).toBe(false);
+    expect(threatCheckApplies({ by: 'opp', san: 'Ba5' })).toBe(true);
+  });
+
+  it('only counts direct threats: a capture or mate next move', async () => {
+    const res = await engine.analyze(nullMoveFen(AFTER_BXC4), { depth: 10 });
+    const th = explainThreat(AFTER_BXC4, res.lines[0].pv);
+    expect(isRealThreat(th)).toBe(false);
+    expect(isRealThreat({ mate: false, gain: 3, move: { captured: null } })).toBe(false);
+    expect(isRealThreat({ mate: false, gain: 3, move: { captured: 'n' } })).toBe(true);
+    expect(isRealThreat({ mate: true, gain: 99, move: { captured: null } })).toBe(true);
+  }, 60000);
+});
+
