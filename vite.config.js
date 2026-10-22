@@ -11,6 +11,10 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['stockfish'],
   },
+  test: {
+    // Only this repo's tests — not the copies inside .claude/worktrees.
+    include: ['test/**/*.test.js'],
+  },
   build: {
     // The opening courses, book and name database are bundled on purpose (~150 kB gzip);
     // they're tiny next to the 7 MB engine and keep the app fully offline-capable.
