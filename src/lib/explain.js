@@ -271,16 +271,36 @@ export function explainThreat(fen, nullPv) {
     }
   }
 
+  // A piece of yours that simply hangs is the threat to name — even if the engine's line
+  // plays a fancier in-between move first (e.g. a check before taking the queen).
+  let direct = null;
+  const top = loose[0];
+  if (top && top.gain >= 2 && L.mateIdx < 0 && !forkText && L.gain <= top.gain + 1) {
+    const att = attackersOf(B, top.square, L.side).sort((a, b) => VALUES[B.get(a).type] - VALUES[B.get(b).type])[0];
+    const mv = att && new Chess(nf).moves({ verbose: true }).find((m) => m.from === att && m.to === top.square);
+    if (mv) {
+      const cap = pn(B.get(att).type), vic = pn(top.piece.type);
+      const defended = attackersOf(B, top.square, mine).length > 0 && top.gain < VALUES[top.piece.type];
+      direct = {
+        text: `${T}’s ${cap} on ${att} attacks your ${vic} on ${top.square} — ${prose(mv.color, mv.san)} would ${defended ? `win it for the ${cap}` : 'win it outright'}.`,
+        move: { from: att, to: top.square, san: mv.san, color: mv.color, captured: top.piece.type },
+        gain: top.gain,
+      };
+      squares.add(att);
+    }
+  }
+
   let text;
   if (L.mateIdx >= 0) text = `${T} threatens mate: ${line}.`;
   else if (forkText) text = forkText;
+  else if (direct) text = direct.text;
   else {
     const m = describeMotif(L.motif, L.steps);
     text = m && L.motif.type !== 'hanging'
       ? `${T} threatens ${first}: ${m.replace(first + ' ', '')}, winning ${winningsPhrase(L)}.`
       : `${T} threatens ${first}, winning ${winningsPhrase(L)}.`;
   }
-  return { text, squares: [...squares], move: s0, L, gain: L.gain, mate: L.mateIdx >= 0 };
+  return { text, squares: [...squares], move: direct?.move || s0, L, gain: direct ? Math.max(direct.gain, L.gain) : L.gain, mate: L.mateIdx >= 0 };
 }
 
 /** One-line description of what a quiet (non-tactical) move does. */

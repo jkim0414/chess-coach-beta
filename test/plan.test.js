@@ -154,3 +154,19 @@ describe('mates belong to the side that gives them', () => {
   });
 });
 
+describe('threat wording', () => {
+  // Reported from play: the rook on h7 attacked the queen on g7, the player clicked g7
+  // (correct), but the note described "...Bxf2+: forks the king and the rook" — the engine's
+  // in-between check — instead of the plain threat ...Rxg7.
+  const QUEEN_ATTACKED = '4k3/1pp3Qr/rbn2P2/p2Pp3/8/2PP4/PP3PP1/RNB1R1K1 w - - 0 20';
+
+  it('names the simple threat to a hanging piece first', async () => {
+    const res = await engine.analyze(nullMoveFen(QUEEN_ATTACKED), { depth: 12 });
+    const th = explainThreat(QUEEN_ATTACKED, res.lines[0].pv);
+    expect(th.text).toBe('Black’s rook on h7 attacks your queen on g7 — …Rxg7 would win it for the rook.');
+    expect(th.move).toMatchObject({ from: 'h7', to: 'g7' });
+    expect(th.squares).toEqual(expect.arrayContaining(['g7', 'h7']));
+    expect(isRealThreat(th)).toBe(true);
+  }, 60000);
+});
+
