@@ -13,6 +13,7 @@
     "test": "vitest run",
     "validate:content": "node scripts/validate-courses.mjs",
     "validate:content:engine": "node scripts/validate-courses.mjs --engine",
+    "audit:coach": "node audit/run.mjs",
     "preview": "vite preview",
     "start": "node server.js"
   },

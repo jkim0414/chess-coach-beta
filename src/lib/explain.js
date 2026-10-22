@@ -2,7 +2,7 @@
 // (attack maps, exchanges, engine lines) so explanations stay truthful.
 import { Chess } from 'chess.js';
 import { NAMES, VALUES, COLOR_NAME, formatLine, opp, turnOf, playLine, coords, nullMoveFen, lineText } from './chessutil.js';
-import { analyzeLine, boardOf, hangingPieces, see, threatsBy, attackersOf, attacksFrom } from './tactics.js';
+import { analyzeLine, boardOf, hangingPieces, see, threatsBy, attackersOf, attacksFrom, motifsOfMove } from './tactics.js';
 
 export const MOTIFS = {
   fork: { name: 'Fork', hint: 'Look for one move that attacks two things at once.', theme: 'fork' },
@@ -48,6 +48,21 @@ export function winningsPhrase(L) {
   const pawns = ours.filter((x) => x.type === 'p').length - theirs.filter((x) => x.type === 'p').length;
   if (L.gain === 2 && pawns >= 2) return 'two pawns';
   return materialPhrase(L.gain);
+}
+
+/** The motif as a phrase that can follow a move: "a fork of the king and the rook on e1". */
+export function motifTail(m) {
+  const tgt = (t) => (t.piece.type === 'k' ? 'the king' : `the ${pn(t.piece.type)} on ${t.square}`);
+  switch (m?.type) {
+    case 'fork': return `a fork of ${m.targets.map(tgt).join(' and ')}`;
+    case 'discovered': return `uncovering an attack on the ${pn(m.piece.type)} on ${m.target}`;
+    case 'discovered-check': return `a discovered check from the ${pn(m.sliderPiece.type)} on ${m.slider}`;
+    case 'double-check': return 'a double check';
+    case 'skewer': return `a skewer through the ${m.front.piece.type === 'k' ? 'king' : pn(m.front.piece.type)} to the ${pn(m.behind.piece.type)} on ${m.behind.square}`;
+    case 'pin': return m.absolute ? `pinning the ${pn(m.pinned.piece.type)} on ${m.pinned.square} to the king` : `pinning the ${pn(m.pinned.piece.type)} on ${m.pinned.square}`;
+    case 'promotion': return 'promoting the pawn';
+    default: return null;
+  }
 }
 
 /** One clause describing a motif. `label` overrides how the move is named (e.g. "12.Rg3"). */
@@ -141,10 +156,11 @@ export function explainMistake({ fen, uci, movePv, winBefore, winAfter }) {
       const att = attackersOf(after, mv.to, opp(side)).map((x) => ({ sq: x, p: after.get(x) })).sort((x, y) => VALUES[x.p.type] - VALUES[y.p.type]);
       const d = attackersOf(after, mv.to, side).length;
       const cheap = att[0];
+      const mine = mv.promotion || mv.piece; // a pawn that just promoted is now that piece
       const reason = d === 0 ? 'nothing defends it'
-        : cheap && VALUES[cheap.p.type] < VALUES[mv.piece] ? `the ${pn(cheap.p.type)} on ${cheap.sq} can take it, and taking back only wins a ${pn(cheap.p.type)}`
-          : `it’s attacked ${times(att.length)} and defended only ${times(d)}`;
-      return { why: `Your ${pn(mv.piece)} on ${mv.to} isn’t safe there — ${reason}.`, refutation, motif: { type: 'hanging' }, kind: 'hangs' };
+        : cheap && VALUES[cheap.p.type] < VALUES[mine] ? `the ${pn(cheap.p.type)} on ${cheap.sq} can take it, and taking back only wins a ${pn(cheap.p.type)}`
+          : att.length > d ? `it’s attacked ${times(att.length)} and defended only ${times(d)}` : null;
+      if (reason) return { why: `Your ${pn(mine)} on ${mv.to} isn’t safe there — ${reason}.`, refutation, motif: { type: 'hanging' }, kind: 'hangs' };
     }
     if (r0.captured && hungBefore.has(r0.to) && r0.to !== mv.from) {
       return { why: `This ignores the threat: your ${pn(r0.captured)} on ${r0.to} was already under attack and is still loose.`, refutation, motif: { type: 'hanging' }, kind: 'ignored-threat' };
@@ -342,7 +358,8 @@ export function explainThreat(fen, nullPv) {
     const byAttacker = new Map();
     for (const h of loose) for (const a of attackersOf(B, h.square, L.side)) byAttacker.set(a, [...(byAttacker.get(a) || []), h]);
     const [att, hits] = [...byAttacker.entries()].sort((x, y) => y[1].length - x[1].length)[0] || [];
-    if (hits?.length >= 2) {
+    // Two loose pawns are only "the threat" if the engine's line actually goes after them.
+    if (hits?.length >= 2 && (s0.from === att || hits.some((h) => h.piece.type !== 'p'))) {
       squares.add(att);
       const names = hits.slice(0, 3).map((h) => `${pn(h.piece.type)} on ${h.square}`);
       forkText = `${T}’s ${pn(B.get(att).type)} on ${att} attacks your ${names.join(' and your ')} at the same time — one of them will fall unless you find something forcing.`;
@@ -373,12 +390,47 @@ export function explainThreat(fen, nullPv) {
   else if (forkText) text = forkText;
   else if (direct) text = direct.text;
   else {
-    const m = describeMotif(L.motif, L.steps);
-    text = m && L.motif.type !== 'hanging'
-      ? `${T} threatens ${first}: ${m.replace(first + ' ', '')}, winning ${winningsPhrase(L)}.`
-      : `${T} threatens ${first}, winning ${winningsPhrase(L)}.`;
+    const m = L.motif && L.motif.type !== 'hanging' ? L.motif : null;
+    const tail = m ? motifTail(m) : null;
+    const later = m && m.ply > 0 && L.steps[m.ply] ? prose(L.steps[m.ply].color, L.steps[m.ply].san) : null;
+    if (tail && later) text = `${T} threatens ${first} and then ${later} — ${tail} — winning ${winningsPhrase(L)}.`;
+    else if (tail) text = `${T} threatens ${first} — ${tail} — winning ${winningsPhrase(L)}.`;
+    else text = `${T} threatens ${first}, winning ${winningsPhrase(L)}.`;
   }
   return { text, squares: [...squares], move: direct?.move || s0, L, gain: direct ? Math.max(direct.gain, L.gain) : L.gain, mate: L.mateIdx >= 0 };
+}
+
+/**
+ * A threatened capture that looks like it can simply be taken back: the recapture whose
+ * failure the threat relies on (so the coach can say why it fails). Null if there is none.
+ */
+export function naiveRecapture(fen, th) {
+  const s0 = th?.L?.steps[0];
+  if (!s0?.captured || s0.check || th.mate) return null;
+  if (th.move.from !== s0.from || th.move.to !== s0.to) return null; // the text names a different (loose) piece
+  const nf = nullMoveFen(fen);
+  if ((see(boardOf(nf), s0.to, s0.color, s0.from) ?? 0) > 0) return null; // it simply wins
+  const B = boardOf(s0.fenAfter);
+  const def = attackersOf(B, s0.to, opp(s0.color)).sort((a, b) => VALUES[B.get(a).type] - VALUES[B.get(b).type])[0];
+  if (!def) return null;
+  const g = new Chess(s0.fenAfter);
+  let mv = null;
+  try { mv = g.move({ from: def, to: s0.to, promotion: 'q' }); } catch { return null; }
+  return mv ? { fen: g.fen(), san: mv.san, color: mv.color } : null;
+}
+
+/** Why the natural recapture fails, from the engine's best line after it. */
+export function recaptureNote(rc, pv) {
+  const L = analyzeLine(rc.fen, pv, 6);
+  const r0 = L.steps[0];
+  if (!r0) return null;
+  // Hypothetical lines (the threat assumes you pass), so moves are named without numbers.
+  const take = `Taking back with ${prose(rc.color, rc.san)}`;
+  if (L.mateIdx >= 0) return `${take} runs into mate, starting with ${prose(r0.color, r0.san)}.`;
+  if (L.gain < 1) return null;
+  const m = motifsOfMove(r0.fenBefore, r0.uci).find((x) => !['check', 'hanging'].includes(x.type));
+  const tail = m ? motifTail(m) : null;
+  return `${take} runs into ${prose(r0.color, r0.san)}, ${tail || `winning ${winningsPhrase(L)}`}.`;
 }
 
 /** One-line description of what a quiet (non-tactical) move does. */

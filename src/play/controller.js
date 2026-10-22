@@ -13,7 +13,7 @@ import { Chess } from 'chess.js';
 import { epd, opp, uciToObj, moveToUci, nullMoveFen, gamePhase, COLOR_NAME, uciToSan, formatLine } from '../lib/chessutil.js';
 import { winOf, gradeFromLoss, gameAccuracy, GRADES } from '../lib/evaluation.js';
 import { analyzeLine } from '../lib/tactics.js';
-import { explainMistake, explainThreat, explainConsequence, MOTIFS, describeQuietMove, prose, capitalize } from '../lib/explain.js';
+import { explainMistake, explainThreat, explainConsequence, naiveRecapture, recaptureNote, MOTIFS, describeQuietMove, prose, capitalize } from '../lib/explain.js';
 import { planOf, planSync, describePlan, planHints } from '../lib/plan.js';
 import { chooseMove, resolvePersona } from '../lib/opponent.js';
 import { openingOf, bookMovesAt } from '../lib/openings.js';
@@ -51,6 +51,20 @@ export function threatCheckApplies(lastPly) {
  */
 export function isRealThreat(th) {
   return !!th && (th.mate || (th.gain >= 2 && !!th.move.captured));
+}
+
+/**
+ * A real threat, ready to show — or null. When the threatened piece looks defended, the
+ * threat only counts if we can say why taking back fails ("Taking back with …Qxe4 runs
+ * into Re1, pinning the queen…"); that sentence goes in `th.recapture`.
+ */
+export async function confirmThreat(engine, fen, th) {
+  if (!isRealThreat(th)) return null;
+  const rc = naiveRecapture(fen, th);
+  if (!rc) return th;
+  const r = await engine.analyze(rc.fen, { depth: THREAT_DEPTH, movetime: 800 });
+  const note = r?.lines[0] && recaptureNote(rc, r.lines[0].pv);
+  return note ? { ...th, recapture: note } : null;
 }
 
 export function detectMoment(fen, lines, oppLoss = 0) {
@@ -309,10 +323,12 @@ export class GameController {
         this.set({ locked: true });
         const res = await this.engine.analyze(nf, { depth: THREAT_DEPTH, movetime: 800 });
         if (gen !== this.gen) return;
-        this.set({ locked: false });
-        const th = res?.lines[0] ? explainThreat(fen, res.lines[0].pv) : null;
         // Ask once per position per game (a take-back returns to positions already asked about).
-        if (isRealThreat(th) && !this.threatsAsked.has(epd(fen)) && this.shouldAskThreat()) {
+        const fresh = !this.threatsAsked.has(epd(fen)) && this.shouldAskThreat();
+        const th = fresh && res?.lines[0] ? await confirmThreat(this.engine, fen, explainThreat(fen, res.lines[0].pv)) : null;
+        if (gen !== this.gen) return;
+        this.set({ locked: false });
+        if (th) {
           this.threatsAsked.add(epd(fen));
           t.threat = th;
           this.set({ active: { kind: 'threat', state: 'asking', threat: th, color: opp(userColor) } });
@@ -373,7 +389,7 @@ export class GameController {
       arrows: [{ startSquare: mv.from, endSquare: mv.to, color: 'rgba(239,68,68,0.85)' }],
       marks: Object.fromEntries(a.threat.squares.map((s) => [s, 'threat'])),
     });
-    this.feed({ tone: 'threat', title: correct ? 'Threat spotted ✓' : 'The threat', text: a.threat.text });
+    this.feed({ tone: 'threat', title: correct ? 'Threat spotted ✓' : 'The threat', text: [a.threat.text, a.threat.recapture].filter(Boolean).join(' ') });
     if (this.t?.pendingMoment && this.t.moment && !this.t.moved) { this.t.pendingMoment = false; this.announceMoment(this.t); }
   }
 
@@ -648,7 +664,7 @@ export class GameController {
       let note = `${san} isn’t it either.`;
       if (res?.fail && a.reason !== 'repertoire') {
         const ex = explainMistake({ fen: t.fen, uci, movePv: res.fail.line.pv, winBefore: res.fail.winBest, winAfter: res.fail.winMove });
-        note = res.fail.loss < 0.1 ? `${san} is playable, but there’s something stronger.` : `${san} doesn’t work: ${ex.why}`;
+        note = res.fail.loss < 0.1 ? `${san} is playable, but there’s something stronger.` : `${san} doesn’t work. ${ex.why}`;
       }
       this.set({ active: { ...a, attempts: a.attempts + 1, retryNote: note } });
       return;

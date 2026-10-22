@@ -31,6 +31,13 @@ architecture. Product intent: teaching that transfers to real games — prefer f
 notice and recall things during play over showing answers.
 
 - Tests run real Stockfish under Node (`test/nodeWorker.js`); `npm test` takes ~10 s.
+- **Coaching audit** (`npm run audit:coach`, ~30 min): plays 40 simulated games through the real
+  `GameController` (`audit/sim.audit.js`), fact-checks every coach message against the board and engine
+  lines (`audit/check.mjs` → `audit/out/report.json`), and writes reviewer samples (`audit/sample.mjs`).
+  Run it after changing anything in `src/lib/explain.js`, `src/lib/plan.js`, `src/lib/tactics.js` or the
+  controller's coaching, and fix what it finds before shipping — James shouldn't be the one catching
+  wrong explanations. `node audit/eval.mjs "<fen>"` prints engine lines for checking a message by hand.
+  When James reports a bad explanation, add a check to `audit/check.mjs` that would have caught it.
 - Opening content follows `src/data/courses/SCHEMA.md`; validate with `npm run validate:content:engine`.
 - Browser-test with `npm run build` + `vite preview`: dev-server HMR reloads (and loses the live game)
   whenever files under `src/data` change.

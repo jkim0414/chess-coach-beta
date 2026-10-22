@@ -137,8 +137,8 @@ export function linesThrough(B, from) {
         } else {
           if (p.color !== me.color) {
             const second = { square: s, piece: p };
-            // A "pinned" piece that can simply take the pinner isn't really pinned.
-            if (attacksFrom(B, first.square).includes(from)) { /* not a pin worth naming */ }
+            // A "pinned" piece that can simply take the pinner (without losing material) isn't really pinned.
+            if (attacksFrom(B, first.square).includes(from) && (see(B, from, opp(me.color), first.square) ?? 0) >= 0) { /* not a pin worth naming */ }
             else if (p.type === 'k' && first.piece.type !== 'k') out.push({ type: 'pin', absolute: true, pinned: first, behind: second });
             else if (!attackerSafe && first.piece.type !== 'k') { /* the front piece can just take the attacker */ }
             else if (first.piece.type === 'k' || SEE_VAL[first.piece.type] > SEE_VAL[p.type]) {
@@ -218,7 +218,9 @@ export function motifsOfMove(fenBefore, uci) {
   const discCheck = disc.some((d) => d.check);
 
   if (directCheck && discCheck) motifs.push({ type: 'double-check' });
-  if (threats.length >= 2 && (movedSafe || directCheck)) {
+  // Two loose pawns attacked at once isn't what anyone means by a fork.
+  const forkWorthy = threats.some((t) => t.check || t.piece.type !== 'p');
+  if (threats.length >= 2 && forkWorthy && (movedSafe || directCheck)) {
     motifs.push({ type: 'fork', piece: r.piece, square: r.to, targets: threats.slice(0, 3) });
   }
   if (disc.length) {
@@ -263,9 +265,12 @@ export function analyzeLine(fen, pv, maxPlies = 12) {
       : !steps[i].captured || (see(boardOf(steps[i].fenAfter), steps[i].to, opp(steps[i].color)) ?? 0) <= 0;
     if (quietAfter) stables.push(i);
   }
-  const best = stables.length ? Math.max(...stables.map((i) => mats[i])) : 0;
-  const bankedAt = stables.find((i) => mats[i] >= best - 0.5);
-  const gain = mateIdx >= 0 ? 99 : matedIdx >= 0 ? -99 : stables.length ? mats[bankedAt] : 0;
+  // Material only counts as won if the other side doesn't simply win it back over the next
+  // couple of moves (a check followed by a recapture, a pawn that promotes, …).
+  const kept = (i) => Math.min(...stables.filter((j) => j >= i && j <= i + 4).map((j) => mats[j]));
+  const best = stables.length ? Math.max(...stables.map(kept)) : 0;
+  const bankedAt = stables.find((i) => kept(i) >= best - 0.5);
+  const gain = mateIdx >= 0 ? 99 : matedIdx >= 0 ? -99 : stables.length ? kept(bankedAt) : 0;
 
   // The ply at which the gain is banked must be one of our moves.
   let keyIdx = 0;

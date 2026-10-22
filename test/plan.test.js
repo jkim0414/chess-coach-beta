@@ -4,8 +4,8 @@ import { createNodeEngine } from './nodeWorker.js';
 import { planOf, planSync, describePlan, planHints } from '../src/lib/plan.js';
 import { motifsOfMove } from '../src/lib/tactics.js';
 import { describeQuietMove } from '../src/lib/explain.js';
-import { GameController, threatCheckApplies, isRealThreat } from '../src/play/controller.js';
-import { explainThreat, explainConsequence, explainMistake } from '../src/lib/explain.js';
+import { GameController, threatCheckApplies, isRealThreat, confirmThreat } from '../src/play/controller.js';
+import { explainThreat, explainConsequence, explainMistake, naiveRecapture, recaptureNote } from '../src/lib/explain.js';
 import { winOf } from '../src/lib/evaluation.js';
 import { nullMoveFen } from '../src/lib/chessutil.js';
 import * as store from '../src/lib/store.js';
@@ -232,3 +232,39 @@ describe('winning positions', () => {
   });
 });
 
+
+describe('threats found by the coaching audit', () => {
+  it('does not call a capture a threat when the material comes straight back', () => {
+    // …Rxd2 wins the knight, but Bh5+ and Kxd2 win the rook back.
+    const a = explainThreat('4k3/3r4/1P2p2p/2B2p2/8/6P1/r1bNBP1P/2R1K1R1 w - - 3 29', ['d7d2', 'e2h5', 'e8d8', 'e1d2', 'c2e4', 'd2e3']);
+    expect(isRealThreat(a)).toBe(false);
+    // Bxd7 wins a bishop, but the h-pawn queens.
+    const b = explainThreat('5k2/r2b3p/8/3pp3/B4P2/1p2K2p/6P1/8 b - - 0 39', ['a4d7', 'h3h2', 'd7c6', 'h2h1q', 'c6d5', 'b3b2']);
+    expect(isRealThreat(b)).toBe(false);
+  });
+
+  it('says why taking back fails when the threatened piece looks defended', async () => {
+    // Nxe4 looks like a trade (…Qxe4), but Re1 then pins the queen.
+    const fen = 'r3kb1r/2pnqpp1/bp1p3p/3P4/4n3/2N3BN/PPP2QPP/R2K3R b kq - 1 16';
+    const th = explainThreat(fen, ['c3e4', 'd7e5', 'h3f4', 'e7d7', 'g3h4', 'f8e7', 'h4e7', 'd7e7']);
+    expect(th.text).toBe('White threatens Nxe4, winning the knight on e4.');
+    const rc = naiveRecapture(fen, th);
+    expect(rc.san).toBe('Qxe4');
+    const r = await engine.analyze(rc.fen, { depth: 12 });
+    expect(recaptureNote(rc, r.lines[0].pv)).toBe('Taking back with …Qxe4 runs into Re1, pinning the queen on e4 to the king.');
+    expect((await confirmThreat(engine, fen, th)).recapture).toMatch(/^Taking back with …Qxe4 runs into Re1/);
+  }, 30000);
+
+  it('drops a "threat" to take a defended piece when taking back is fine', async () => {
+    // …Bxd1 is a bishop trade; the engine's null-move line just preferred Rxe7+ to recapturing.
+    const fen = '3r4/1p2p1k1/2p2p2/p6p/3P2b1/8/P2R1PPP/3BR1NK w - - 0 23';
+    const th = explainThreat(fen, ['g4d1', 'e1e7', 'g7f8', 'e7e1', 'd1a4', 'd2b2']);
+    expect(isRealThreat(th)).toBe(true);
+    expect(await confirmThreat(engine, fen, th)).toBe(null);
+  }, 30000);
+
+  it('describes a discovered check without garbling the sentence', () => {
+    const th = explainThreat('rn2k2r/pp2qppp/2pbb1n1/8/Q1BP4/2N2N2/PP3PPP/R1B1K2R w KQkq - 0 11', ['e6c4', 'c1e3', 'b7b5', 'a4c2']);
+    expect(th.text).toBe('Black threatens …Bxc4+ — a discovered check from the queen on e7 — winning the bishop on c4.');
+  });
+});
