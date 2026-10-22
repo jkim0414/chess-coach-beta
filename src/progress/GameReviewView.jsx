@@ -5,7 +5,7 @@ import { MoveList, Empty } from '../components/ui.jsx';
 import { useStore } from '../lib/store.js';
 import { href } from '../lib/router.js';
 import { GRADES, whiteWin } from '../lib/evaluation.js';
-import { explainLine } from '../lib/explain.js';
+import { planOf, describePlan } from '../lib/plan.js';
 import { getEngine } from '../lib/engine.js';
 
 /** Win-chance graph (from the learner's side) with one point per move they played. */
@@ -69,8 +69,11 @@ export default function GameReviewView({ gameId }) {
     const at = idx;
     const pos = cur ? cur.fenBefore : startFen;
     setDeep({ idx: at, loading: true });
-    const res = await getEngine().analyze(pos, { depth: 16, multipv: 1, movetime: 4000 });
-    setDeep(res?.lines[0] ? { idx: at, text: explainLine(pos, res.lines[0].pv).text } : null);
+    const engine = getEngine();
+    const res = await engine.analyze(pos, { depth: 18, multipv: 1, movetime: 6000 });
+    if (!res?.lines[0]) { setDeep(null); return; }
+    const plan = await planOf(engine, pos, res.lines[0].pv);
+    setDeep({ idx: at, text: describePlan(plan, { userMove: cur?.by === 'user' ? cur.uci : undefined }) });
   }
 
   return (

@@ -9,6 +9,7 @@ import { requestPattern } from '../puzzles/patternBus.js';
 import { MOTIFS } from '../lib/explain.js';
 import { uciToSan } from '../lib/chessutil.js';
 import { engineAccepts } from '../trainer/useSolver.js';
+import { hintProvider } from '../lib/plan.js';
 import PositionTrainer from './PositionTrainer.jsx';
 import { useNow } from '../lib/useNow.js';
 import LineSession from '../openings/LineSession.jsx';
@@ -61,6 +62,7 @@ function PositionItem({ card, onDone, runKey }) {
   const now = useNow();
   const engine = getEngine();
   const accept = useMemo(() => (card.type === 'puzzle' ? undefined : (fen, uci) => engineAccepts(engine, fen, uci, card.type === 'tactic' ? 0.04 : 0.07)), [card, engine]);
+  const getHints = useMemo(() => hintProvider(engine, card.type === 'tactic' ? card.motif : null), [engine, card.type, card.motif]);
   const onFinish = useCallback((r) => {
     const rating = autoRating({ correct: r.solved, hintsUsed: r.hintLevel, attempts: r.attempts, ms: r.ms, reps: card.sched?.reps || 0, slowMs: 60000, fastMs: 8000 });
     reviewCard(card.id, rating);
@@ -89,6 +91,7 @@ function PositionItem({ card, onDone, runKey }) {
         </>
       )}
       accept={accept}
+      getHints={getHints}
       onFinish={onFinish}
       footer={finished && (
         <div className="done-box">

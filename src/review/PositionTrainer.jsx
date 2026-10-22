@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Board from '../components/Board.jsx';
 import { useSolver } from '../trainer/useSolver.js';
 import { formatLine, pvToSan, turnOf, COLOR_NAME } from '../lib/chessutil.js';
@@ -7,10 +7,25 @@ import { formatLine, pvToSan, turnOf, COLOR_NAME } from '../lib/chessutil.js';
  * "Find the move" on one position. The learner plays every move of their side in
  * `solution`; replies are automatic. Calls onFinish once with how it went.
  */
-export default function PositionTrainer({ fen, orientation, solution, firstAnswers, lastMove, prompt, context, explanation, accept, onFinish, footer, runKey }) {
+export default function PositionTrainer({ fen, orientation, solution, firstAnswers, lastMove, prompt, context, explanation, accept, onFinish, footer, runKey, getHints }) {
   const s = useSolver({ fen, solution, firstAnswers, accept, key: runKey });
   const reported = useRef(false);
   const side = turnOf(fen);
+  // Hint text belongs to the position it was given for.
+  const [hint, setHint] = useState({ fen: null, text: null, loading: false });
+  const hintText = hint.fen === s.fen ? hint.text : null;
+  const maxHints = getHints ? 3 : 2;
+
+  async function onHint() {
+    if (!getHints) { s.hint(); return; }
+    const at = s.fen;
+    setHint({ fen: at, text: hintText, loading: true });
+    const hs = await getHints(at, s.solution[s.idx]);
+    const h = hs?.[s.hintLevel];
+    if (!h) { setHint({ fen: at, text: null, loading: false }); s.hint(); return; }
+    s.hint({ marks: h.marks, arrows: h.arrows });
+    setHint({ fen: at, text: h.text, loading: false });
+  }
 
   useEffect(() => { reported.current = false; }, [runKey]);
   useEffect(() => {
@@ -50,9 +65,12 @@ export default function PositionTrainer({ fen, orientation, solution, firstAnswe
               {s.wrong && !s.checking && <p className="retry-note">{s.wrong.san} isn’t it. {s.attempts >= 2 ? 'Try a hint.' : 'Try again.'}</p>}
               {s.status === 'replying' && <p className="muted">Good — opponent replies…</p>}
               {s.idx > 0 && s.status === 'solving' && !s.wrong && <p className="good-note">Correct. Keep going.</p>}
+              {hintText && <p className="hint-text">💡 {hintText}</p>}
               <div className="callout-actions">
                 {s.status === 'revealing' && <p className="muted">Here’s how it goes…</p>}
-                <button type="button" className="btn btn-ghost btn-sm" onClick={s.hint} disabled={s.status !== 'solving' || s.hintLevel >= 2}>{s.hintLevel ? 'Show the move' : 'Hint'}</button>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={onHint} disabled={s.status !== 'solving' || s.hintLevel >= maxHints || hint.loading}>
+                  {hint.loading ? 'Thinking…' : s.hintLevel === maxHints - 1 ? 'Show the move' : s.hintLevel ? 'More help' : 'Hint'}
+                </button>
                 <button type="button" className="btn btn-ghost btn-sm" onClick={s.reveal} disabled={s.status !== 'solving'}>Show solution</button>
               </div>
             </>

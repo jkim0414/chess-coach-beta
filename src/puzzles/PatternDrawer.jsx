@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { fetchPuzzle, themeName, THEMES } from './lichess.js';
 import { recordPuzzle, upsertCard, reviewCard, useStore, setSettings } from '../lib/store.js';
 import { Rating } from '../lib/fsrs.js';
 import { turnOf } from '../lib/chessutil.js';
 import PositionTrainer from '../review/PositionTrainer.jsx';
+import { getEngine } from '../lib/engine.js';
+import { hintProvider, motifForTheme } from '../lib/plan.js';
 
 const SET_SIZE = 3;
 
@@ -24,6 +26,7 @@ export default function PatternDrawer({ theme: initialTheme, onClose }) {
   const puzzle = loaded.key === key ? loaded.puzzle : null;
   const error = loaded.key === key ? loaded.error : null;
   const finished = finishedKey === key;
+  const getHints = useMemo(() => hintProvider(getEngine(), motifForTheme(theme)), [theme]);
   const retry = () => setN((x) => x + 1);
 
   useEffect(() => {
@@ -88,6 +91,7 @@ export default function PatternDrawer({ theme: initialTheme, onClose }) {
             prompt={`Find the ${themeName(theme).toLowerCase().replace(/s$/, '')}.`}
             context={<>Lichess puzzle · rating {puzzle.rating} · <a href={puzzle.url} target="_blank" rel="noreferrer">open on Lichess</a></>}
             onFinish={onFinish}
+            getHints={getHints}
             footer={finished && (
               <div className="done-box">
                 {done ? (

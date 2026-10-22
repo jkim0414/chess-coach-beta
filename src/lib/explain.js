@@ -36,7 +36,7 @@ export function materialPhrase(gain) {
 }
 
 /** What the side capturing actually takes home: "the knight on c6", "the exchange". */
-function winningsPhrase(L) {
+export function winningsPhrase(L) {
   const end = L.mateIdx >= 0 ? L.mateIdx : Math.max(L.keyIdx, 0);
   const ours = [], theirs = [];
   L.steps.slice(0, end + 2).forEach((s) => {
@@ -49,10 +49,11 @@ function winningsPhrase(L) {
   return materialPhrase(L.gain);
 }
 
-export function describeMotif(m, steps) {
+/** One clause describing a motif. `label` overrides how the move is named (e.g. "12.Rg3"). */
+export function describeMotif(m, steps, label) {
   if (!m) return '';
   const st = steps?.[m.ply ?? 0];
-  const mv = st ? prose(st.color, st.san) : '';
+  const mv = label ?? (st ? prose(st.color, st.san) : '');
   const tgt = (t) => (t.piece.type === 'k' ? 'king' : `${pn(t.piece.type)} on ${t.square}`);
   switch (m.type) {
     case 'fork': {
@@ -72,7 +73,9 @@ export function describeMotif(m, steps) {
     case 'double-check':
       return `${mv} is a double check — the king has to move`;
     case 'hanging':
-      return `${mv} takes the ${pn(m.piece)} on ${m.square}, which was simply undefended`;
+      return m.defenders
+        ? `${mv} takes the ${pn(m.piece)} on ${m.square}, which wasn’t defended enough`
+        : `${mv} takes the ${pn(m.piece)} on ${m.square}, which was undefended`;
     case 'promotion':
       return `${mv} promotes the pawn`;
     case 'back-rank':
@@ -227,17 +230,22 @@ export function describeQuietMove(fen, uci) {
   if (r.san.startsWith('O-O')) return 'castles: the king is safe and the rook joins the game';
 
   const savedPiece = hangingPieces(before, side).find((h) => h.square === r.from || !hangingPieces(after, side).some((x) => x.square === h.square));
+
+  if (r.captured) {
+    const g2 = see(before, r.to, side, r.from) ?? 0;
+    let text;
+    if (g2 <= 0 && VALUES[r.captured] === VALUES[r.piece]) {
+      text = r.captured === r.piece ? `trades ${pn(r.piece)}s on ${r.to}` : `trades your ${pn(r.piece)} for the ${pn(r.captured)} on ${r.to}`;
+    } else text = `takes the ${pn(r.captured)} on ${r.to}`;
+    if (savedPiece?.square === r.from) text += ` — the ${pn(r.piece)} was under attack anyway`;
+    return text;
+  }
+
   if (savedPiece) {
     const p = before.get(savedPiece.square);
     return savedPiece.square === r.from
       ? `moves the ${pn(p.type)} out of danger to ${r.to}`
       : `protects the ${pn(p.type)} on ${savedPiece.square}, which was under attack`;
-  }
-
-  if (r.captured) {
-    const g2 = see(before, r.to, side, r.from) ?? 0;
-    if (g2 <= 0 && VALUES[r.captured] === VALUES[r.piece]) return `trades ${pn(r.piece)}s on ${r.to}`;
-    return `captures on ${r.to}`;
   }
 
   const threats = threatsBy(after, r.to).filter((t) => !t.check);
@@ -261,6 +269,7 @@ export function describeQuietMove(fen, uci) {
     let own = 0, theirs = 0;
     for (let i = 1; i <= 8; i++) { const p = after.get(file + i); if (p?.type === 'p') (p.color === side ? own++ : theirs++); }
     if (rel === 7) return 'puts the rook on the 7th rank, where it attacks pawns and boxes in the king';
+    if (rel === 3 && r.from[1] === r.to[1] && kingSideOfFile(after, opp(side), f)) return 'swings the rook along the third rank toward the enemy king (a “rook lift”)';
     if (!own && !theirs) return `takes the open ${file}-file`;
     if (!own) return `puts the rook on the half-open ${file}-file, pressing against the pawn there`;
   }

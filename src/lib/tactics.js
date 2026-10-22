@@ -122,6 +122,8 @@ export function linesThrough(B, from) {
   if (!me || !['b', 'r', 'q'].includes(me.type)) return [];
   const [f, r] = coords(from);
   const out = [];
+  // A skewer or a relative pin is only real if the attacking piece can't simply be taken.
+  const attackerSafe = (see(B, from, opp(me.color)) ?? 0) <= 0;
   for (const [df, dr] of dirsFor(me.type)) {
     let cf = f + df, cr = r + dr;
     let first = null;
@@ -136,6 +138,7 @@ export function linesThrough(B, from) {
           if (p.color !== me.color) {
             const second = { square: s, piece: p };
             if (p.type === 'k' && first.piece.type !== 'k') out.push({ type: 'pin', absolute: true, pinned: first, behind: second });
+            else if (!attackerSafe && first.piece.type !== 'k') { /* the front piece can just take the attacker */ }
             else if (first.piece.type === 'k' || SEE_VAL[first.piece.type] > SEE_VAL[p.type]) {
               if (first.piece.type === 'k' || (see(B, first.square, me.color, from) ?? 0) > 0 || SEE_VAL[first.piece.type] > SEE_VAL[me.type])
                 out.push({ type: 'skewer', front: first, behind: second });
@@ -150,6 +153,15 @@ export function linesThrough(B, from) {
     }
   }
   return out;
+}
+
+/** Square of the `byColor` slider that pins the piece on `square` to its king (absolute pin), or null. */
+export function pinnedBy(B, square, byColor) {
+  for (const [s, p] of B) {
+    if (p.color !== byColor || !['b', 'r', 'q'].includes(p.type)) continue;
+    if (linesThrough(B, s).some((l) => l.type === 'pin' && l.absolute && l.pinned.square === square)) return s;
+  }
+  return null;
 }
 
 /** Attacks newly opened by moving a piece off `from`: [{slider, target, piece, check, gain}] */
@@ -217,7 +229,7 @@ export function motifsOfMove(fenBefore, uci) {
   }
   if (r.captured) {
     const victimWasFree = (see(before, r.to, color, r.from) ?? 0) >= VALUES[r.captured] && VALUES[r.captured] > 0;
-    if (victimWasFree) motifs.push({ type: 'hanging', piece: r.captured, square: r.to });
+    if (victimWasFree) motifs.push({ type: 'hanging', piece: r.captured, square: r.to, defenders: attackersOf(before, r.to, opp(color)).length });
   }
   if (g.isCheck() && !motifs.length) motifs.push({ type: 'check', square: r.to });
   return motifs.sort((a, b) => MOTIF_PRIORITY.indexOf(a.type) - MOTIF_PRIORITY.indexOf(b.type));

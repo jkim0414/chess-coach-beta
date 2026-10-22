@@ -135,12 +135,13 @@ describe('GameController', () => {
     c.start(config({ coachMode: 'guided', fen: 'r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4' }));
     const s = await waitFor(c, (st) => st.active?.kind === 'moment');
     expect(s.active.type).toBe('mate');
-    c.hint();
+    await c.hint();
     expect(c.getState().active.hintText).toMatch(/check/i);
-    c.hint();
+    await c.hint();
     expect(c.getState().marks).toEqual({ h5: 'hint' });
-    c.hint();
+    await c.hint();
     expect(c.getState().arrows[0]).toMatchObject({ startSquare: 'h5', endSquare: 'f7' });
+    expect(c.getState().active.hintText).toMatch(/Qxf7 is checkmate/);
   }, 60000);
 
   it('after a take-back, the coach notes match the position on the board', async () => {

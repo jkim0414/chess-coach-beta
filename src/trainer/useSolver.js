@@ -84,11 +84,13 @@ export function useSolver({ fen, solution, firstAnswers = [], accept, replyDelay
     return true;
   }, [state.fen, state.idx, firstAnswers, accept, playReply]);
 
-  const hint = useCallback(() => {
+  /** Next hint. `visual` ({marks, arrows}) overrides the default piece-then-arrow highlights. */
+  const hint = useCallback((visual) => {
     setState((s) => {
       const u = sol.current[s.idx];
       if (!u) return s;
       const level = s.hintLevel + 1;
+      if (visual) return { ...s, hintLevel: level, marks: visual.marks || {}, arrows: visual.arrows || [] };
       return { ...s, hintLevel: level, marks: { [u.slice(0, 2)]: 'hint' }, arrows: level >= 2 ? [{ startSquare: u.slice(0, 2), endSquare: u.slice(2, 4), color: 'rgba(34,197,94,0.85)' }] : [] };
     });
   }, []);

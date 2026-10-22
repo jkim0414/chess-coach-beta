@@ -10,10 +10,11 @@
 // No React in here — the UI subscribes to snapshots — so the whole flow can be
 // driven from tests with a real engine.
 import { Chess } from 'chess.js';
-import { epd, opp, uciToObj, moveToUci, nullMoveFen, playLine, gamePhase, COLOR_NAME, uciToSan, formatLine } from '../lib/chessutil.js';
+import { epd, opp, uciToObj, moveToUci, nullMoveFen, gamePhase, COLOR_NAME, uciToSan, formatLine } from '../lib/chessutil.js';
 import { winOf, gradeFromLoss, gameAccuracy, GRADES } from '../lib/evaluation.js';
 import { analyzeLine } from '../lib/tactics.js';
-import { explainMistake, explainThreat, explainLine, MOTIFS, describeQuietMove, prose, capitalize } from '../lib/explain.js';
+import { explainMistake, explainThreat, MOTIFS, describeQuietMove, prose, capitalize } from '../lib/explain.js';
+import { planOf, planSync, describePlan, planHints } from '../lib/plan.js';
 import { chooseMove, resolvePersona } from '../lib/opponent.js';
 import { openingOf, bookMovesAt } from '../lib/openings.js';
 import { repertoireAt, COURSES } from '../lib/courses.js';
@@ -21,8 +22,12 @@ import { autoRating, Rating } from '../lib/fsrs.js';
 import * as store from '../lib/store.js';
 import { themeName } from '../puzzles/lichess.js';
 
-export const COACH_DEPTH = 14;
-const COACH_MOVETIME = 3500;
+export const COACH_DEPTH = 16;
+const COACH_MOVETIME = 4000;
+// Before calling a move an inaccuracy or worse, re-search it head-to-head against the
+// engine's choice: shallow searches flip between near-equal moves.
+const VERIFY_DEPTH = 18;
+const VERIFY_MOVETIME = 6000;
 const THREAT_DEPTH = 10;
 
 const LIVE_KEY = 'chesscoach:live';
@@ -147,6 +152,10 @@ export class GameController {
     const e = { id: fid(), ply: this.s.plies.length, ...entry };
     this.set({ feed: [...this.s.feed, e].slice(-60) });
     return e;
+  }
+
+  updateFeed(id, patch) {
+    this.set({ feed: this.s.feed.map((e) => (e.id === id ? { ...e, ...patch } : e)) });
   }
 
   get settings() { return store.getState().settings; }
@@ -404,7 +413,27 @@ export class GameController {
     const winBest = winOf(lines[0].score);
     const winMove = winOf(line.score);
     const loss = Math.max(0, winBest - winMove);
-    return { lines, line, loss, winBest, winMove, grade: gradeFromLoss(loss, lines[0].pv[0] === uci) };
+    const ev = { lines, line, loss, winBest, winMove, grade: gradeFromLoss(loss, lines[0].pv[0] === uci) };
+    return lines[0].pv[0] !== uci && loss > 0.03 && loss < 0.3 ? this.verifyMove(t, uci, ev) : ev;
+  }
+
+  /** Deeper head-to-head search of the played move against the engine's choice. */
+  async verifyMove(t, uci, ev) {
+    const bestUci = ev.lines[0].pv[0];
+    const res = await this.engine.analyze(t.fen, { depth: VERIFY_DEPTH, multipv: 2, searchmoves: [bestUci, uci], movetime: VERIFY_MOVETIME });
+    if (t.gen !== this.gen) return null;
+    const top = res?.lines[0];
+    const mine = res?.lines.find((l) => l.pv[0] === uci);
+    if (!top || !mine) return ev;
+    const lines = [top, ...ev.lines.filter((l) => l.pv[0] !== top.pv[0])];
+    if (t.result) {
+      t.result = { ...t.result, lines };
+      if (top.pv[0] !== bestUci) { t.plan = null; t.planPromise = null; }
+    }
+    const winBest = winOf(top.score);
+    const winMove = winOf(mine.score);
+    const loss = Math.max(0, winBest - winMove);
+    return { lines, line: mine, loss, winBest, winMove, grade: gradeFromLoss(loss, top.pv[0] === uci), verified: true };
   }
 
   async grade(t, plyIdx, fenBefore) {
@@ -460,7 +489,11 @@ export class GameController {
       }
     }
     if (mode !== 'exam' && grade === 'inaccuracy') {
-      this.feed({ tone: 'inaccuracy', title: `${ply.san}?! Inaccuracy`, text: `Playable, but ${best.san} was more precise.`, reveal: explainLine(fenBefore, lines[0].pv).text });
+      const entry = this.feed({
+        tone: 'inaccuracy', title: `${ply.san}?! Inaccuracy`, text: `Playable, but ${best.san} was more precise.`,
+        revealLabel: `What does ${best.san} do?`, reveal: describePlan(planSync(fenBefore, lines[0].pv), { userMove: ply.uci }),
+      });
+      this.planFor(t).then((plan) => { if (plan) this.updateFeed(entry.id, { reveal: describePlan(plan, { userMove: ply.uci }) }); });
     }
     this.oppTurn();
   }
@@ -476,7 +509,7 @@ export class GameController {
     const more = (L.mateIdx >= 0 ? L.mateIdx : L.keyIdx) >= 2;
     const title = m.type === 'defend' ? 'You found the only move' : m.type === 'mate' ? 'You found the mating attack' : `You found it${motifName ? ` — ${motifName.toLowerCase()}` : ''}`;
     this.feed({
-      tone: 'best', title, text: more ? 'Now finish the job — play the combination through.' : explainLine(t.fen, ev.line.pv).text,
+      tone: 'best', title, text: more ? 'Now finish the job — play the combination through.' : describePlan(planSync(t.fen, ev.line.pv)),
       actions: m.type !== 'defend' ? practise(m.motif) : undefined,
     });
     if (more && m.type !== 'defend') this.startDrill(t, L);
@@ -542,11 +575,15 @@ export class GameController {
       orientation: this.s.userColor === 'w' ? 'white' : 'black',
       lastMove: prevOpp ? { from: prevOpp.uci.slice(0, 2), to: prevOpp.uci.slice(2, 4) } : null,
       prompt: type === 'tactic' ? (t.moment?.type === 'mate' ? 'Find the forced mate.' : t.moment?.type === 'defend' ? 'Find the only move that holds.' : 'Find the winning continuation.') : 'Find a good move — you went wrong here before.',
-      explanation: explainLine(t.fen, lines[0].pv).text,
+      explanation: describePlan(planSync(t.fen, lines[0].pv)),
       source: { gameId: this.s.gameId, ply: plyIdx, opponent: this.s.persona.name, date: Date.now(), played: ply.san, why: ex?.why || null },
     });
     store.reviewCard(id, firstRating);
     this.patchPly(plyIdx, { cardId: id });
+    // Refine the card's explanation with the threat analysis once it's available.
+    if (lines[0].pv[0] === t.result?.lines[0]?.pv[0]) {
+      this.planFor(t).then((plan) => { if (plan) store.upsertCard({ id, explanation: describePlan(plan) }); });
+    }
     return id;
   }
 
@@ -592,7 +629,7 @@ export class GameController {
     const ev = res.loss === 0 && a.reason === 'repertoire' ? await this.evalMove(t, uci) : res;
     if (t.gen !== this.gen) return;
     if (ev?.line) this.patchPly(plyIdx, { grade: a.reason === 'repertoire' ? 'book' : ev.grade, loss: ev.loss, winAfter: ev.winMove, winBefore: ev.winBest, scoreAfter: ev.line.score, best: { uci: ev.lines[0].pv[0], san: uciToSan(t.fen, ev.lines[0].pv[0]) } });
-    const explain = a.reason === 'repertoire' ? (t.rep.move.note || '') : ev?.line ? explainLine(t.fen, ev.line.pv).text : '';
+    const explain = a.reason === 'repertoire' ? (t.rep.move.note || '') : ev?.line ? describePlan(planSync(t.fen, ev.line.pv)) : '';
     this.set({ active: null, arrows: [] });
     this.feed({ tone: 'best', title: `${san} — that’s it`, text: explain, actions: a.reason === 'missed' ? practise(a.motif) : undefined });
     if (a.reason === 'missed' && ev?.line) {
@@ -611,15 +648,19 @@ export class GameController {
     if (a.cardId && a.reason !== 'repertoire') store.reviewCard(a.cardId, Rating.Again, Date.now() + 1);
     const res = t.result || (await t.analysis);
     if (t.gen !== this.gen || !res) return;
-    const uci = a.reason === 'repertoire' ? t.rep.move.uci : res.lines[0].pv[0];
-    const pv = a.reason === 'repertoire' ? null : res.lines[0].pv;
+    const shown = a.reason === 'repertoire' ? null : await this.planFor(t);
+    if (t.gen !== this.gen) return;
+    const pv = a.reason === 'repertoire' ? null : shown?.L.steps.length ? shown.L.steps.map((s) => s.uci) : res.lines[0].pv;
+    const uci = a.reason === 'repertoire' ? t.rep.move.uci : pv[0];
     const plyIdx = this.applyMove(uci, 'user', { revealed: true, thinkMs: 0 });
     const san = this.s.plies[plyIdx].san;
     const ev = await this.evalMove(t, uci);
     if (t.gen !== this.gen) return;
     if (ev) this.patchPly(plyIdx, { grade: ev.grade, loss: ev.loss, winAfter: ev.winMove, winBefore: ev.winBest, scoreAfter: ev.line.score, best: { uci, san } });
     this.set({ active: null, arrows: [] });
-    const text = a.reason === 'repertoire' ? (t.rep.move.note || 'Your repertoire move.') : explainLine(t.fen, pv).text;
+    const plan = a.reason === 'repertoire' ? null : await this.planFor(t);
+    if (t.gen !== this.gen) return;
+    const text = a.reason === 'repertoire' ? (t.rep.move.note || 'Your repertoire move.') : describePlan(plan || planSync(t.fen, pv));
     this.feed({ tone: 'tactic', title: `The move was ${san}`, text, actions: a.reason === 'missed' ? practise(a.motif) : undefined });
     if (a.reason === 'missed' && pv) {
       const L = analyzeLine(t.fen, pv, 12);
@@ -637,38 +678,59 @@ export class GameController {
     this.oppTurn();
   }
 
-  /** Hint ladder: theme → piece → move. */
-  hint() {
+  /** What the best move here is about (threat, defence, payoff). Computed once per position, on demand. */
+  async planFor(t) {
+    if (t.plan) return t.plan;
+    let best = t.result?.lines[0]?.pv;
+    if (!best) return null;
+    // In your repertoire, hints and answers lead to your repertoire move.
+    const rep = t.rep?.move.uci;
+    if (rep && rep !== best[0] && !t.planPromise) {
+      t.planPromise = this.engine.analyze(t.fen, { depth: 14, searchmoves: [rep], movetime: 3000 })
+        .then((r) => planOf(this.engine, t.fen, r?.lines[0]?.pv || [rep], { opponentThreat: !t.threat }));
+    }
+    t.planPromise = t.planPromise || planOf(this.engine, t.fen, best, { opponentThreat: !t.threat });
+    const plan = await t.planPromise;
+    if (plan && t.threat && !plan.oppThreat) plan.oppThreat = t.threat;
+    t.plan = plan;
+    return plan;
+  }
+
+  /**
+   * Hint ladder: 1) the target or goal, never the move; 2) which piece; 3) the move and
+   * the whole idea behind it.
+   */
+  async hint() {
     const a = this.s.active;
     const t = this.t;
-    if (!t) return;
-    const best = t.result?.lines[0]?.pv;
+    if (!t || this.s.hintPending) return;
     if (a?.kind === 'drill') {
       const step = a.L.steps[a.idx];
       this.set({ active: { ...a, hintLevel: (a.hintLevel || 0) + 1 }, arrows: [{ startSquare: step.from, endSquare: step.to, color: 'rgba(34,197,94,0.85)' }] });
       return;
     }
-    if (!best) return;
-    const level = (a?.hintLevel || 0) + 1;
+    if (!t.result?.lines[0]) return;
+    const level = Math.min(3, (a?.hintLevel || 0) + 1);
     t.hintsUsed++;
-    // The theme hint describes the *solution*. For a missed tactic that's the tactic's
-    // motif; after an ordinary mistake, a.motif describes the refutation, so don't use it.
-    const motif = a?.kind === 'intervention' ? (a.reason === 'missed' ? a.motif : null) : t.moment?.motif;
-    let hintText;
     if (a?.kind === 'intervention' && a.reason === 'repertoire') {
-      hintText = level === 1 ? `It starts with your ${pieceName(t.fen, t.rep.move.uci)}.` : `It’s ${t.rep.move.san}.`;
       const u = t.rep.move.uci;
+      const hintText = level === 1 ? `It starts with your ${pieceName(t.fen, u)}.` : `It’s ${t.rep.move.san}. ${t.rep.move.note || ''}`.trim();
       this.set({ active: { ...a, hintLevel: level, hintText }, marks: { [u.slice(0, 2)]: 'hint' }, arrows: level >= 2 ? [{ startSquare: u.slice(0, 2), endSquare: u.slice(2, 4), color: 'rgba(34,197,94,0.85)' }] : [] });
       return;
     }
-    if (level === 1) hintText = motif && MOTIFS[motif] ? MOTIFS[motif].hint : generalHint(t.fen, best[0]);
-    else if (level === 2) hintText = `Look at your ${pieceName(t.fen, best[0])}.`;
-    else hintText = 'Here’s the move.';
-    const patch = { hintLevel: level, hintText };
-    const marks = level >= 2 ? { [best[0].slice(0, 2)]: 'hint' } : {};
-    const arrows = level >= 3 ? [{ startSquare: best[0].slice(0, 2), endSquare: best[0].slice(2, 4), color: 'rgba(34,197,94,0.85)' }] : [];
-    if (!a || a.kind === 'threat') this.set({ active: { kind: 'moment', type: 'hint', title: 'Hint', text: '', ...patch }, marks, arrows });
-    else this.set({ active: { ...a, ...patch }, marks, arrows });
+    // The theme hint describes the *solution*. For a missed tactic that's the tactic's
+    // motif; after an ordinary mistake, a.motif describes the refutation, so don't use it.
+    const motif = a?.kind === 'intervention' ? (a.reason === 'missed' ? a.motif : null) : t.moment?.motif;
+    this.set({ hintPending: true });
+    const plan = await this.planFor(t);
+    if (t !== this.t || t.gen !== this.gen) return;
+    this.set({ hintPending: false });
+    if (!plan) return;
+    const h = planHints(plan, { motif })[level - 1];
+    const cur = this.s.active;
+    const patch = { hintLevel: level, hintText: h.text };
+    if (!cur || cur.kind === 'threat') this.set({ active: { kind: 'moment', type: 'hint', title: 'Hint', text: '', ...patch }, marks: h.marks, arrows: h.arrows });
+    else this.set({ active: { ...cur, ...patch }, marks: h.marks, arrows: h.arrows });
   }
 
   // ── playing a combination to the end ────────────────────────────────────
@@ -776,14 +838,5 @@ function pieceName(fen, uci) {
   return p ? { p: 'pawn', n: 'knight', b: 'bishop', r: 'rook', q: 'queen', k: 'king' }[p.type] : 'pieces';
 }
 
-function generalHint(fen, uci) {
-  const [step] = playLine(fen, [uci]);
-  if (!step) return 'Checks, captures, threats — in that order.';
-  if (step.mate || step.check) return 'Look at your checks.';
-  if (step.captured) return 'There’s a capture worth calculating.';
-  if (step.san.startsWith('O-O')) return 'Think about king safety.';
-  if (step.piece === 'p') return 'A pawn move matters here — which one changes the structure in your favour?';
-  return 'No tactic needed. Which of your pieces is doing the least? Improve it.';
-}
 
 export { formatLine };

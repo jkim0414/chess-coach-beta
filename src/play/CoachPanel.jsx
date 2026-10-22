@@ -17,7 +17,7 @@ function Callout({ s, c }) {
       <div className="callout callout-idle">
         <p>{text}</p>
         {s.turn === 'user' && !s.locked && !s.grading && (
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => c.hint()} disabled={!s.analysisReady}>Hint</button>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => c.hint()} disabled={!s.analysisReady || s.hintPending}>{s.hintPending ? 'Thinking…' : 'Hint'}</button>
         )}
       </div>
     );
@@ -51,7 +51,7 @@ function Callout({ s, c }) {
         {a.text && <p>{a.text}</p>}
         {a.hintText && <p className="hint-text">💡 {a.hintText}</p>}
         <div className="callout-actions">
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => c.hint()} disabled={(a.hintLevel || 0) >= 3}>{a.hintLevel ? 'More help' : 'Hint'}</button>
+          {(a.hintLevel || 0) < 3 && <button type="button" className="btn btn-ghost btn-sm" onClick={() => c.hint()} disabled={s.hintPending}>{s.hintPending ? 'Thinking…' : a.hintLevel === 2 ? 'Show the move' : a.hintLevel ? 'More help' : 'Hint'}</button>}
         </div>
       </div>
     );
@@ -69,7 +69,7 @@ function Callout({ s, c }) {
         {a.hintText && <p className="hint-text">💡 {a.hintText}</p>}
         <div className="callout-actions">
           {decide && <button type="button" className="btn btn-primary btn-sm" onClick={() => c.retry()}>Try again</button>}
-          {!decide && <button type="button" className="btn btn-ghost btn-sm" onClick={() => c.hint()} disabled={(a.hintLevel || 0) >= 3}>{a.hintLevel ? 'More help' : 'Hint'}</button>}
+          {!decide && (a.hintLevel || 0) < 3 && <button type="button" className="btn btn-ghost btn-sm" onClick={() => c.hint()} disabled={s.hintPending}>{s.hintPending ? 'Thinking…' : a.hintLevel === 2 ? 'Show the move' : a.hintLevel ? 'More help' : 'Hint'}</button>}
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => c.showMe()}>Show me</button>
           {decide && <button type="button" className="btn btn-ghost btn-sm" onClick={() => c.playOn()}>Keep my move</button>}
         </div>
@@ -98,7 +98,7 @@ function FeedItem({ e }) {
       <div className="feed-body">
         <div className="feed-title">{e.title}</div>
         {e.text && <div className="feed-text">{e.text}</div>}
-        {e.reveal && (open ? <div className="feed-text reveal">{e.reveal}</div> : <button type="button" className="link" onClick={() => setOpen(true)}>Why?</button>)}
+        {e.reveal && (open ? <div className="feed-text reveal">{e.reveal}</div> : <button type="button" className="link" onClick={() => setOpen(true)}>{e.revealLabel || 'Why?'}</button>)}
         {e.actions?.map((x) => (
           <button key={x.label} type="button" className="btn btn-ghost btn-xs" onClick={() => x.action === 'pattern' && requestPattern(x.theme)}>🎯 {x.label}</button>
         ))}
