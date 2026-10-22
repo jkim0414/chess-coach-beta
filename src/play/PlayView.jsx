@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Board from '../components/Board.jsx';
 import { MoveList, EvalBar, PlayerStrip } from '../components/ui.jsx';
 import { useStore } from '../lib/store.js';
@@ -37,11 +37,29 @@ function Summary({ s, c, onNew }) {
   );
 }
 
-export default function PlayView() {
+function LastGame({ game }) {
+  if (!game) return null;
+  return (
+    <div className="card resume">
+      <div>
+        <div className="lesson-kicker">Last game</div>
+        <p><span className={`result result-${game.result}`}>{game.result}</span> vs {game.persona}{game.accuracy != null ? ` · accuracy ${game.accuracy}%` : ''}</p>
+      </div>
+      <div className="callout-actions">
+        <a className="btn btn-ghost btn-sm" href={href('game', game.id)}>Review it</a>
+      </div>
+    </div>
+  );
+}
+
+export default function PlayView({ visible = true }) {
   const [s, c] = useGame();
   const showEval = useStore((st) => st.settings.showEval);
   const [flipped, setFlipped] = useState(false);
   const [setup, setSetup] = useState(false);
+  const lastGame = useStore((st) => st.games[0]);
+  // Leaving a finished game (e.g. to review it) puts it away: coming back shows the setup screen.
+  useEffect(() => { if (!visible && s.status === 'over') c.dismiss(); }, [visible, s.status, c]);
   const [dismissed, setDismissed] = useState(false);
   const [saved] = useState(() => c.resumable());
   const resumable = dismissed ? null : saved;
@@ -65,6 +83,7 @@ export default function PlayView() {
             </div>
           </div>
         )}
+        {s.status === 'idle' && !resumable && <LastGame game={lastGame} />}
         <GameSetup onStart={(config) => { setSetup(false); setFlipped(false); c.start(config); window.scrollTo(0, 0); }} />
       </div>
     );

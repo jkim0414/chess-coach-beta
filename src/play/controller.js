@@ -204,6 +204,11 @@ export class GameController {
     if (this.chess.turn() === userColor) this.userTurn(); else this.oppTurn();
   }
 
+  /** Put a finished game away so the Play tab shows the setup screen again. */
+  dismiss() {
+    if (this.s.status === 'over') this.set({ ...initialState() });
+  }
+
   stop() {
     this.gen++;
     this.engine.cancel();

@@ -7,6 +7,9 @@ import { href } from '../lib/router.js';
 import { GRADES, whiteWin } from '../lib/evaluation.js';
 import { planOf, describePlan } from '../lib/plan.js';
 import { getEngine } from '../lib/engine.js';
+import { go } from '../lib/router.js';
+import { getController } from '../play/session.js';
+import { getState } from '../lib/store.js';
 
 /** Win-chance graph (from the learner's side) with one point per move they played. */
 function EvalGraph({ plies, userColor, current, onSelect }) {
@@ -78,7 +81,13 @@ export default function GameReviewView({ gameId }) {
 
   return (
     <div className="page-wide">
-      <a className="back" href={href('progress')}>← Progress</a>
+      <div className="review-top">
+        <a className="back" href={href('progress')}>← Progress</a>
+        <div className="callout-actions">
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => { getController().dismiss(); go('play'); }}>＋ New game</button>
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => rematch(game)}>Rematch vs {game.persona}</button>
+        </div>
+      </div>
       <header className="page-head compact">
         <h1>vs {game.persona} <small className="muted">· {new Date(game.date).toLocaleDateString()}</small></h1>
         <p className="lede"><span className={`result result-${game.result}`}>{game.result}</span> by {game.reason}{game.accuracy != null ? ` · accuracy ${game.accuracy}%` : ''}{game.opening ? ` · ${game.opening}` : ''}</p>
@@ -132,6 +141,16 @@ export default function GameReviewView({ gameId }) {
       </div>
     </div>
   );
+}
+
+/** Same opponent, strength and colour as the reviewed game; your current coaching settings. */
+function rematch(game) {
+  const { settings } = getState();
+  getController().start({
+    personaId: game.personaId, custom: settings.custom, elo: game.elo, userColor: game.userColor === 'b' ? 'black' : 'white',
+    coachMode: settings.coachMode, threatPrompts: settings.threatPrompts,
+  });
+  go('play');
 }
 
 function fenAfter(ply) {

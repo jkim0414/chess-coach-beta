@@ -403,3 +403,5 @@ td .result, .lede .result { font-size: inherit; }
 .explain b { color: var(--text-strong); }
 .refutation { font-size: 13.5px; color: var(--text-dim); }
 .refutation span { color: var(--text-strong); }
+.review-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.review-top .callout-actions { margin-top: 0; }
