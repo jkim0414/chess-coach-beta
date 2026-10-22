@@ -13,7 +13,7 @@ import { Chess } from 'chess.js';
 import { epd, opp, uciToObj, moveToUci, nullMoveFen, gamePhase, COLOR_NAME, uciToSan, formatLine } from '../lib/chessutil.js';
 import { winOf, gradeFromLoss, gameAccuracy, GRADES } from '../lib/evaluation.js';
 import { analyzeLine } from '../lib/tactics.js';
-import { explainMistake, explainThreat, MOTIFS, describeQuietMove, prose, capitalize } from '../lib/explain.js';
+import { explainMistake, explainThreat, explainConsequence, MOTIFS, describeQuietMove, prose, capitalize } from '../lib/explain.js';
 import { planOf, planSync, describePlan, planHints } from '../lib/plan.js';
 import { chooseMove, resolvePersona } from '../lib/opponent.js';
 import { openingOf, bookMovesAt } from '../lib/openings.js';
@@ -506,8 +506,13 @@ export class GameController {
       }
     }
     if (mode !== 'exam' && grade === 'inaccuracy') {
+      // Say what your move runs into, not just what the better move does.
+      const cons = explainConsequence({ fen: fenBefore, movePv: line.pv, winAfter: winMove });
+      const better = formatLine(fenBefore, [best.san]);
+      if (cons?.telling) this.patchPly(plyIdx, { why: cons.text });
       const entry = this.feed({
-        tone: 'inaccuracy', title: `${ply.san}?! Inaccuracy`, text: `Playable, but ${best.san} was more precise.`,
+        tone: 'inaccuracy', title: `${ply.san}?! Inaccuracy`,
+        text: cons?.telling ? `${cons.text} Better was ${better}.` : `Playable, but ${better} was more precise.`,
         revealLabel: `What does ${best.san} do?`, reveal: describePlan(planSync(fenBefore, lines[0].pv), { userMove: ply.uci }),
       });
       this.planFor(t).then((plan) => { if (plan) this.updateFeed(entry.id, { reveal: describePlan(plan, { userMove: ply.uci }) }); });
@@ -537,6 +542,10 @@ export class GameController {
   intervene(t, plyIdx, { reason, ev, repIssue }) {
     const ply = this.s.plies[plyIdx];
     const ex = explainMistake({ fen: t.fen, uci: ply.uci, movePv: ev.line.pv, winBefore: ev.winBest, winAfter: ev.winMove });
+    // "What happens next" follows the line until the material settles, so a piece you can win
+    // straight back doesn't read like a piece lost.
+    const cons = explainConsequence({ fen: t.fen, movePv: ev.line.pv, winAfter: ev.winMove });
+    if (cons) ex.refutation = cons.summary;
     const T = COLOR_NAME[opp(this.s.userColor)];
     const alsoBad = ev.grade === 'mistake' || ev.grade === 'blunder';
     const lower = (x) => (x ? x[0].toLowerCase() + x.slice(1) : x);

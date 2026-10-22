@@ -283,7 +283,7 @@ export function analyzeLine(fen, pv, maxPlies = 12) {
   if (!motif && gain >= 1) motif = { type: 'material', ply: 0 };
   if (!motif && steps[0] && motifsOfMove(steps[0].fenBefore, steps[0].uci).some((m) => m.type === 'check')) motif = { type: 'check', ply: 0 };
 
-  return { side, steps, gain, mateIdx, keyIdx, motif, mats };
+  return { side, steps, gain, mateIdx, keyIdx, motif, mats, stables };
 }
 
 function isBackRankMate(step) {

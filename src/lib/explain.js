@@ -164,6 +164,74 @@ export function explainMistake({ fen, uci, movePv, winBefore, winAfter }) {
   };
 }
 
+const times = (n) => (n === 1 ? 'once' : n === 2 ? 'twice' : `${n} times`);
+
+/**
+ * What the move just played runs into, following the engine's line after it: the
+ * opponent's reply and why it works, where the material settles, and — when a capture
+ * turns out not to win anything — that it "wasn't really free".
+ * Returns { text, summary } or null. Written for the player who made the move ("you").
+ */
+export function explainConsequence({ fen, movePv, winAfter }) {
+  const U = analyzeLine(fen, movePv, 12);
+  const st = U.steps;
+  if (st.length < 2) return null;
+  const me = U.side;
+  const Them = COLOR_NAME[opp(me)];
+  // Follow the line to the first quiet point after which the material no longer changes.
+  const settled = U.stables.filter((i) => i >= 1 && i <= 7);
+  const last = settled.length ? settled[settled.length - 1] : 1;
+  const end = settled.find((i) => U.mats.slice(i, last + 1).every((m) => m === U.mats[last])) ?? last;
+  const g0 = U.mats[0];
+  const net = U.mats[end];
+  const r1 = st[1];
+  const num = (s) => formatLine(s.fenBefore, [s.san]);
+
+  let reply = `${Them} answers ${num(r1)}`;
+  if (r1.captured) {
+    const B = boardOf(r1.fenBefore);
+    const def = attackersOf(B, r1.to, me).length;
+    const att = attackersOf(B, r1.to, opp(me)).length;
+    reply += `, taking the ${pn(r1.captured)} on ${r1.to}`;
+    if (def === 0) reply += ' — nothing defends it';
+    else if (att > def) reply += ` — it’s attacked ${times(att)} and defended only ${times(def)}`;
+  } else {
+    const hits = threatsBy(boardOf(r1.fenAfter), r1.to).filter((x) => !x.check);
+    if (hits.length) reply += `, attacking your ${hits.slice(0, 2).map((x) => `${pn(x.piece.type)} on ${x.square}`).join(' and ')}`;
+  }
+  const outcome = balance(st.slice(0, end + 1), me, net);
+  const notFree = g0 > 0 && net >= 0 && net < g0 && st[0].captured ? ` — the ${pn(st[0].captured)} wasn’t really free` : '';
+  const sentences = [`${reply}.`];
+  if (end >= 2) sentences.push(`After ${narrate(st.slice(2, end + 1))}, ${outcome}${notFree}.`);
+  else if (net !== g0 || net < 0) sentences.push(`${capitalize(outcome)}${notFree}.`);
+  if (net >= 0 && winAfter < 0.42) sentences.push(`${Them} also gets the more comfortable position.`);
+  return { text: sentences.join(' '), summary: `${narrate(st.slice(1, end + 1))}: ${outcome}`, net, g0, telling: !!r1.captured || net !== g0 };
+}
+
+const COUNT = ['', 'a', 'two', 'three', 'four', 'five'];
+function pieceList(types) {
+  const order = ['q', 'r', 'b', 'n', 'p'];
+  const n = {};
+  types.forEach((t) => { n[t] = (n[t] || 0) + 1; });
+  const parts = order.filter((t) => n[t]).map((t) => (n[t] === 1 ? `${t === 'q' ? 'the' : 'a'} ${pn(t)}` : `${COUNT[n[t]] || n[t]} ${pn(t)}s`));
+  return parts.length <= 1 ? parts[0] || '' : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+}
+
+/** "material is level" / "you've given a knight for a pawn" / "you're a pawn up". */
+function balance(steps, me, net) {
+  if (net === 0) return 'material is level';
+  const got = [], gave = [];
+  for (const s of steps) if (s.captured) (s.color === me ? got : gave).push(s.captured);
+  for (let i = got.length - 1; i >= 0; i--) {
+    const j = gave.indexOf(got[i]);
+    if (j >= 0) { gave.splice(j, 1); got.splice(i, 1); }
+  }
+  if (got.length && gave.length) return `you’ve given ${pieceList(gave).replace(/^the /, 'your ')} for ${pieceList(got)}`;
+  if (gave.length) return `you’re ${pieceList(gave).replace(/^the /, 'a ')} down`;
+  if (got.length) return `you’re ${pieceList(got).replace(/^the /, 'a ')} up`;
+  return net > 0 ? `you’re ${materialPhrase(net)} up` : `you’re ${materialPhrase(-net)} down`;
+}
+
 /** "What is the opponent threatening?" — from a null-move search. */
 export function explainThreat(fen, nullPv) {
   const nf = nullMoveFen(fen);

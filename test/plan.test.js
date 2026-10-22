@@ -5,7 +5,8 @@ import { planOf, describePlan, planHints } from '../src/lib/plan.js';
 import { motifsOfMove } from '../src/lib/tactics.js';
 import { describeQuietMove } from '../src/lib/explain.js';
 import { GameController, threatCheckApplies, isRealThreat } from '../src/play/controller.js';
-import { explainThreat } from '../src/lib/explain.js';
+import { explainThreat, explainConsequence } from '../src/lib/explain.js';
+import { winOf } from '../src/lib/evaluation.js';
 import { nullMoveFen } from '../src/lib/chessutil.js';
 import * as store from '../src/lib/store.js';
 
@@ -78,6 +79,27 @@ describe('threat check', () => {
     expect(isRealThreat({ mate: false, gain: 3, move: { captured: null } })).toBe(false);
     expect(isRealThreat({ mate: false, gain: 3, move: { captured: 'n' } })).toBe(true);
     expect(isRealThreat({ mate: true, gain: 99, move: { captured: null } })).toBe(true);
+  }, 60000);
+});
+
+describe('what your move runs into', () => {
+  // Reported from play: 12.Nxd4 was called an inaccuracy, but the note only described
+  // 12.d3 — not that the knight on d4 hangs to the queen down the open d-file.
+  const BEFORE_NXD4 = 'r2qkb1r/pp3ppp/2p1b3/8/1n1p4/5B2/PPPPNPPP/R1BQ1RK1 w kq - 0 12';
+
+  it('explains that the "free" pawn isn’t free', async () => {
+    const r = await engine.analyze(BEFORE_NXD4, { depth: 18, searchmoves: ['e2d4'], movetime: 20000 });
+    const c = explainConsequence({ fen: BEFORE_NXD4, movePv: r.lines[0].pv, winAfter: winOf(r.lines[0].score) });
+    expect(c.text).toMatch(/^Black answers 12\.\.\.Qxd4, taking the knight on d4 — nothing defends it\./);
+    expect(c.text).toMatch(/material is level — the pawn wasn’t really free/);
+    expect(c.telling).toBe(true);
+  }, 60000);
+
+  it('names the trade for outright losses', async () => {
+    const fen = 'r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3';
+    const r = await engine.analyze(fen, { depth: 14, searchmoves: ['f3e5'] });
+    const c = explainConsequence({ fen, movePv: r.lines[0].pv, winAfter: winOf(r.lines[0].score) });
+    expect(c.summary).toBe('Black 3...Nxe5: you’ve given a knight for a pawn');
   }, 60000);
 });
 
