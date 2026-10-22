@@ -10,10 +10,10 @@
 // No React in here — the UI subscribes to snapshots — so the whole flow can be
 // driven from tests with a real engine.
 import { Chess } from 'chess.js';
-import { epd, opp, uciToObj, moveToUci, nullMoveFen, gamePhase, COLOR_NAME, uciToSan, formatLine } from '../lib/chessutil.js';
+import { epd, opp, uciToObj, moveToUci, nullMoveFen, gamePhase, COLOR_NAME, NAMES, turnOf, uciToSan, formatLine } from '../lib/chessutil.js';
 import { winOf, gradeFromLoss, gameAccuracy, GRADES } from '../lib/evaluation.js';
-import { analyzeLine } from '../lib/tactics.js';
-import { explainMistake, explainThreat, explainConsequence, naiveRecapture, recaptureNote, MOTIFS, describeQuietMove, prose, capitalize } from '../lib/explain.js';
+import { analyzeLine, boardOf, see } from '../lib/tactics.js';
+import { explainMistake, explainThreat, explainConsequence, naiveRecapture, recaptureNote, MOTIFS, describeQuietMove, prose } from '../lib/explain.js';
 import { planOf, planSync, describePlan, planHints } from '../lib/plan.js';
 import { chooseMove, resolvePersona } from '../lib/opponent.js';
 import { openingOf, bookMovesAt } from '../lib/openings.js';
@@ -58,14 +58,35 @@ export function isRealThreat(th) {
  * threat only counts if we can say why taking back fails ("Taking back with …Qxe4 runs
  * into Re1, pinning the queen…"); that sentence goes in `th.recapture`.
  */
-export async function confirmThreat(engine, fen, th) {
+export async function confirmThreat(engine, fen, th, passScore = null) {
   if (!isRealThreat(th)) return null;
+  // Only worth stopping for if passing would really cost you, compared with your best move now.
+  if (passScore) {
+    const best = (await engine.analyze(fen, { depth: THREAT_DEPTH, movetime: 800 }))?.lines[0]?.score;
+    if (best) {
+      if (best.type === 'mate' && best.value > 0) return null; // you have a mate yourself
+      // Not when you're lost whatever you do, or still clearly winning even if you ignore it.
+      if (winOf(best) < 0.05 || 1 - winOf(passScore) >= 0.85) return null;
+    }
+  }
+  let out = th;
   const rc = naiveRecapture(fen, th);
-  if (!rc) return th;
-  const r = await engine.analyze(rc.fen, { depth: THREAT_DEPTH, movetime: 800 });
-  const note = r?.lines[0] && recaptureNote(rc, r.lines[0].pv);
-  return note ? { ...th, recapture: note } : null;
+  if (rc) {
+    const r = await engine.analyze(rc.fen, { depth: THREAT_DEPTH, movetime: 800 });
+    const note = r?.lines[0] && recaptureNote(rc, r.lines[0].pv);
+    if (!note) return null;
+    out = { ...out, recapture: note };
+  }
+  // The attacker may be just as loose — worth knowing before you defend.
+  const B = boardOf(fen), me = turnOf(fen), from = th.move.from;
+  if (!th.mate && B.get(from) && (see(B, from, me) ?? 0) > 0) {
+    out = { ...out, counter: `It’s your move, though — ${COLOR_NAME[opp(me)]}’s ${NAMES[B.get(from).type]} on ${from} is loose too.` };
+  }
+  return out;
 }
+
+/** Everything the threat callout says once answered. */
+export const threatText = (th) => [th.text, th.recapture, th.counter].filter(Boolean).join(' ');
 
 export function detectMoment(fen, lines, oppLoss = 0) {
   if (!lines?.length || !lines[1]) return null; // a forced move is not a "moment"
@@ -311,13 +332,16 @@ export class GameController {
     this.t = t;
     const fens = [config.fen || new Chess().fen(), ...plies.map((p) => p.fenAfter)];
     const opening = plies.length <= 30 ? openingOf(fens) || this.s.opening : this.s.opening;
+    const threatCheck = config.threatPrompts && config.coachMode !== 'exam' && plies.length > 1 && !this.chess.isCheck() && threatCheckApplies(plies[plies.length - 1]);
     if (opening && opening.name !== this.s.opening?.name) {
-      this.feed({ tone: 'opening', title: opening.name, text: opening.idea || '' });
+      const note = { tone: 'opening', title: opening.name, text: opening.idea || '' };
+      // With a threat question coming, post it afterwards (its idea text can give the answer away).
+      if (threatCheck) t.openingNote = note; else this.feed(note);
     }
     this.set({ turn: 'user', thinking: false, grading: false, analysisReady: false, opening, active: null, arrows: [], marks: {} });
 
     // 1) Threat awareness. Runs first and briefly locks the board, so the question comes before the move.
-    if (config.threatPrompts && config.coachMode !== 'exam' && plies.length > 1 && !this.chess.isCheck() && threatCheckApplies(plies[plies.length - 1])) {
+    if (threatCheck) {
       const nf = nullMoveFen(fen);
       if (nf) {
         this.set({ locked: true });
@@ -325,7 +349,7 @@ export class GameController {
         if (gen !== this.gen) return;
         // Ask once per position per game (a take-back returns to positions already asked about).
         const fresh = !this.threatsAsked.has(epd(fen)) && this.shouldAskThreat();
-        const th = fresh && res?.lines[0] ? await confirmThreat(this.engine, fen, explainThreat(fen, res.lines[0].pv)) : null;
+        const th = fresh && res?.lines[0] ? await confirmThreat(this.engine, fen, explainThreat(fen, res.lines[0].pv), res.lines[0].score) : null;
         if (gen !== this.gen) return;
         this.set({ locked: false });
         if (th) {
@@ -335,6 +359,8 @@ export class GameController {
         }
       }
     }
+
+    if (t.openingNote && this.s.active?.kind !== 'threat') this.postOpeningNote(t);
 
     // 2) The coach's analysis, while you think.
     t.analysis = this.engine.analyze(fen, { depth: COACH_DEPTH, multipv: 3, movetime: COACH_MOVETIME }).then((res) => {
@@ -389,8 +415,14 @@ export class GameController {
       arrows: [{ startSquare: mv.from, endSquare: mv.to, color: 'rgba(239,68,68,0.85)' }],
       marks: Object.fromEntries(a.threat.squares.map((s) => [s, 'threat'])),
     });
-    this.feed({ tone: 'threat', title: correct ? 'Threat spotted ✓' : 'The threat', text: [a.threat.text, a.threat.recapture].filter(Boolean).join(' ') });
+    this.feed({ tone: 'threat', title: correct ? 'Threat spotted ✓' : 'The threat', text: threatText(a.threat) });
+    if (this.t?.openingNote) this.postOpeningNote(this.t);
     if (this.t?.pendingMoment && this.t.moment && !this.t.moved) { this.t.pendingMoment = false; this.announceMoment(this.t); }
+  }
+
+  postOpeningNote(t) {
+    this.feed(t.openingNote);
+    t.openingNote = null;
   }
 
   // ── moves ───────────────────────────────────────────────────────────────
@@ -513,7 +545,7 @@ export class GameController {
     }
     if (bad || missed) {
       if (missed) store.recordMotif(m.motif, false);
-      this.recordMistake(t, plyIdx, ev, missed ? 'missed' : grade, explainMistake({ fen: t.fen, uci: ply.uci, movePv: line.pv, winBefore: winBest, winAfter: winMove }));
+      this.recordMistake(t, plyIdx, ev, missed ? 'missed' : grade, explainMistake({ fen: t.fen, uci: ply.uci, movePv: line.pv, winBefore: winBest, winAfter: winMove, bestPv: ev.lines?.[0]?.pv, bestScore: ev.lines?.[0]?.score }));
     }
 
     if (m && loss < 0.05 && ['tactic', 'mate', 'punish', 'defend'].includes(m.type)) {
@@ -562,13 +594,13 @@ export class GameController {
   // ── interventions ───────────────────────────────────────────────────────
   intervene(t, plyIdx, { reason, ev, repIssue }) {
     const ply = this.s.plies[plyIdx];
-    const ex = explainMistake({ fen: t.fen, uci: ply.uci, movePv: ev.line.pv, winBefore: ev.winBest, winAfter: ev.winMove });
+    const ex = explainMistake({ fen: t.fen, uci: ply.uci, movePv: ev.line.pv, winBefore: ev.winBest, winAfter: ev.winMove, bestPv: ev.lines?.[0]?.pv, bestScore: ev.lines?.[0]?.score });
     // "What happens next" follows the line until the material settles, so a piece you can win
     // straight back doesn't read like a piece lost.
     const cons = explainConsequence({ fen: t.fen, movePv: ev.line.pv, winAfter: ev.winMove });
     if (cons && ex.kind !== 'positional') ex.refutation = cons.summary; // positional notes already walk the line
     const T = COLOR_NAME[opp(this.s.userColor)];
-    const alsoBad = ev.grade === 'mistake' || ev.grade === 'blunder';
+    const alsoBad = (ev.grade === 'mistake' || ev.grade === 'blunder') && ex.kind !== 'missed-win'; // "missed a win" is already the title
     const lower = (x) => (x ? x[0].toLowerCase() + x.slice(1) : x);
     let title, why, reviewWhy;
     if (reason === 'repertoire') {
@@ -663,7 +695,7 @@ export class GameController {
     if (!res || res.fail) {
       let note = `${san} isn’t it either.`;
       if (res?.fail && a.reason !== 'repertoire') {
-        const ex = explainMistake({ fen: t.fen, uci, movePv: res.fail.line.pv, winBefore: res.fail.winBest, winAfter: res.fail.winMove });
+        const ex = explainMistake({ fen: t.fen, uci, movePv: res.fail.line.pv, winBefore: res.fail.winBest, winAfter: res.fail.winMove, bestPv: res.fail.lines?.[0]?.pv, bestScore: res.fail.lines?.[0]?.score });
         note = res.fail.loss < 0.1 ? `${san} is playable, but there’s something stronger.` : `${san} doesn’t work. ${ex.why}`;
       }
       this.set({ active: { ...a, attempts: a.attempts + 1, retryNote: note } });
@@ -848,7 +880,7 @@ export class GameController {
     }
     if (idx > end || !L.steps[idx]) {
       this.set({ active: null, arrows: [] });
-      this.feed({ tone: 'best', title: 'Combination complete', text: L.mateIdx >= 0 ? 'Checkmate is coming — well played.' : `You’ve banked the advantage. ${capitalize(describeQuietMove(fen, uci))}.` });
+      this.feed({ tone: 'best', title: 'Combination complete', text: L.mateIdx >= 0 ? 'Checkmate is coming — well played.' : `You’ve banked the advantage: ${prose(turnOf(fen), uciToSan(fen, uci))} ${describeQuietMove(fen, uci)}.` });
       this.oppTurn();
       return;
     }

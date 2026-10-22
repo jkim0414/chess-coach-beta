@@ -38,7 +38,7 @@ function Callout({ s, c }) {
     return (
       <div className={`callout ${a.correct ? 'callout-good' : 'callout-threat'}`}>
         <div className="callout-kicker">{a.correct ? 'Threat spotted ✓' : 'The threat'}</div>
-        <p>{a.threat.text}{a.threat.recapture && ` ${a.threat.recapture}`}</p>
+        <p>{[a.threat.text, a.threat.recapture, a.threat.counter].filter(Boolean).join(' ')}</p>
         <p className="muted">Now find a move that deals with it.</p>
         <div className="callout-actions">
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => c.hint()} disabled={!s.analysisReady || s.hintPending}>{s.hintPending ? 'Thinking…' : 'Hint'}</button>

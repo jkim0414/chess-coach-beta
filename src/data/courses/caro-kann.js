@@ -75,7 +75,7 @@ const EXCHANGE = [
   ['Bd3', 'White\'s bishop takes the b1–h7 diagonal, so Black\'s bishop cannot come to f5 comfortably.'],
   ['Nc6', 'Develop and hit d4. Black waits for c3 before deciding where the c8-bishop goes.'],
   ['c3', 'Supports d4. This is a reversed Carlsbad structure: White plays on the kingside, while Black, with the half-open c-file, runs a minority attack with ...b5–b4.'],
-  ['Nf6', 'Develops and controls e4, stopping Ne5 ideas for the moment.'],
+  ['Nf6', 'Develops toward the centre and controls e4, a square White would like for a knight.'],
   ['Bf4', 'Active: the bishop takes the b8–h2 diagonal and will meet ...Bd6 with Bxd6.'],
   ['Bg4', 'With f5 covered by the d3-bishop, the c8-bishop goes to g4 — outside the chain before ...e6. It hits d1 and will pin a knight on f3.'],
 ];

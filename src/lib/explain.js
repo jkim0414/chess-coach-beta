@@ -1,7 +1,7 @@
 // The coach's words. Everything here is derived from concrete board facts
 // (attack maps, exchanges, engine lines) so explanations stay truthful.
 import { Chess } from 'chess.js';
-import { NAMES, VALUES, COLOR_NAME, formatLine, opp, turnOf, playLine, coords, nullMoveFen, lineText } from './chessutil.js';
+import { NAMES, VALUES, COLOR_NAME, formatLine, opp, turnOf, playLine, coords, nullMoveFen, lineText, materialBalance } from './chessutil.js';
 import { analyzeLine, boardOf, hangingPieces, see, threatsBy, attackersOf, attacksFrom, motifsOfMove } from './tactics.js';
 
 export const MOTIFS = {
@@ -42,11 +42,20 @@ export function winningsPhrase(L) {
     if (!s.captured) return;
     (s.color === L.side ? ours : theirs).push({ type: s.captured, square: s.to });
   });
-  if (ours.length === 1 && theirs.length === 0) return ours[0].type === 'p' ? `the pawn on ${ours[0].square}` : `the ${pn(ours[0].type)} on ${ours[0].square}`;
-  const top = ours.sort((a, b) => VALUES[b.type] - VALUES[a.type])[0];
-  if (top && theirs.length === 1 && top.type === 'r' && ['n', 'b'].includes(theirs[0].type)) return 'the exchange';
-  const pawns = ours.filter((x) => x.type === 'p').length - theirs.filter((x) => x.type === 'p').length;
-  if (L.gain === 2 && pawns >= 2) return 'two pawns';
+  // Even trades cancel out; what's left is what was really won.
+  for (let i = ours.length - 1; i >= 0; i--) {
+    const j = theirs.findIndex((x) => VALUES[x.type] === VALUES[ours[i].type]);
+    if (j >= 0) { theirs.splice(j, 1); ours.splice(i, 1); }
+  }
+  // Name the square only if the piece is standing there now (not where the line moved it).
+  const B0 = L.steps[0] ? boardOf(L.steps[0].fenBefore) : null;
+  const one = (x) => (B0?.get(x.square)?.type === x.type ? `the ${pn(x.type)} on ${x.square}` : `a ${pn(x.type)}`);
+  ours.sort((a, b) => VALUES[b.type] - VALUES[a.type]);
+  const sum = (xs) => xs.reduce((n, x) => n + VALUES[x.type], 0);
+  if (ours.length === 1 && theirs.length === 0) return one(ours[0]);
+  if (ours.length === 1 && theirs.length === 1 && ours[0].type === 'r' && ['n', 'b'].includes(theirs[0].type)) return 'the exchange';
+  if (!theirs.length && ours.length >= 2 && ours.every((x) => x.type === 'p') && ours.length === L.gain) return `${COUNT[ours.length] || ours.length} pawns`;
+  if (!theirs.length && ours.length >= 2 && ours.length <= 3 && Math.abs(sum(ours) - L.gain) <= 1) return joinAnd(ours.map(one));
   return materialPhrase(L.gain);
 }
 
@@ -128,7 +137,7 @@ export function explainLine(fen, pv) {
  * Why the move just played is bad. Returns `why` (safe to show before the learner
  * retries — it never names the better move) and `refutation` (the punishing line).
  */
-export function explainMistake({ fen, uci, movePv, winBefore, winAfter }) {
+export function explainMistake({ fen, uci, movePv, winBefore, winAfter, bestPv = null, bestScore = null }) {
   const side = turnOf(fen);
   const [mv] = playLine(fen, [uci]);
   if (!mv) return { why: '', refutation: '' };
@@ -145,7 +154,9 @@ export function explainMistake({ fen, uci, movePv, winBefore, winAfter }) {
     return { why: `After ${yourMove}, ${T} has a forced mate${n > 1 ? ` in ${n}` : ''}.`, refutation, motif: R.motif, kind: 'mate' };
   }
 
-  if (r0 && R.gain >= 1) {
+  // What your move itself took counts: a trade, or winning more than you give back, isn't a loss.
+  const ownGain = (mv.captured ? VALUES[mv.captured] : 0) + (mv.promotion ? VALUES[mv.promotion] - 1 : 0);
+  if (r0 && R.gain - ownGain >= 1) {
     const before = boardOf(fen);
     const after = boardOf(mv.fenAfter);
     const hungBefore = new Set(hangingPieces(before, side).map((h) => h.square));
@@ -163,13 +174,21 @@ export function explainMistake({ fen, uci, movePv, winBefore, winAfter }) {
       if (reason) return { why: `Your ${pn(mine)} on ${mv.to} isn’t safe there — ${reason}.`, refutation, motif: { type: 'hanging' }, kind: 'hangs' };
     }
     if (r0.captured && hungBefore.has(r0.to) && r0.to !== mv.from) {
-      return { why: `This ignores the threat: your ${pn(r0.captured)} on ${r0.to} was already under attack and is still loose.`, refutation, motif: { type: 'hanging' }, kind: 'ignored-threat' };
+      const victim = after.get(r0.to);
+      const att = attackersOf(after, r0.to, opp(side)).map((x) => ({ sq: x, p: after.get(x) })).sort((x, y) => VALUES[x.p.type] - VALUES[y.p.type]);
+      const defs = attackersOf(after, r0.to, side).length;
+      const cheap = att[0];
+      const how = !defs ? 'and nothing defends it'
+        : cheap && VALUES[cheap.p.type] < VALUES[victim.type] ? `by the ${pn(cheap.p.type)} on ${cheap.sq} — defending it doesn’t help against a cheaper attacker; it needed to move`
+          : 'and it’s still attacked more times than it’s defended';
+      return { why: `This ignores the threat: your ${pn(r0.captured)} on ${r0.to} was already under attack${how.startsWith('by') ? ' ' : ', '}${how}.`, refutation, motif: { type: 'hanging' }, kind: 'ignored-threat' };
     }
     const newlyLoose = hungAfter.find((h) => !hungBefore.has(h.square) && h.square !== mv.to);
     if (newlyLoose && r0.to === newlyLoose.square) {
       return { why: `Moving the ${pn(mv.piece)} left your ${pn(newlyLoose.piece.type)} on ${newlyLoose.square} without enough protection.`, refutation, motif: { type: 'hanging' }, kind: 'removed-defender' };
     }
-    const m = describeMotif(R.motif, R.steps);
+    const ms = R.motif && R.steps[R.motif.ply ?? 0];
+    const m = describeMotif(R.motif, R.steps, ms ? lineText([ms]) : undefined);
     return {
       why: m ? `It walks into a tactic: ${m}, and ${T} wins ${won}.` : `${T} has a forcing sequence that wins ${won}.`,
       refutation, motif: R.motif, kind: 'tactic',
@@ -177,26 +196,49 @@ export function explainMistake({ fen, uci, movePv, winBefore, winAfter }) {
   }
 
   const { U, end } = settle(fen, movePv || [uci]);
+  // Was there something concrete to win instead? That's the real lesson, ahead of nuances.
+  const B = bestPv?.length ? analyzeLine(fen, bestPv, Math.min(24, bestPv.length)) : null;
+  if ((B && B.mateIdx >= 0) || (bestScore?.type === 'mate' && bestScore.value > 0)) {
+    return { why: 'It misses a forced mate. Look at every check.', refutation, motif: { type: 'mate' }, kind: 'missed-win' };
+  }
+  const played = U.steps.length ? U.mats[Math.max(0, end)] : 0;
+  const cap = B?.steps.slice(0, B.keyIdx + 1).find((s) => s.color === side && s.captured);
+  if (B && B.gain >= 1 && B.gain - Math.max(0, played) >= 1 && cap) {
+    const here = boardOf(fen).get(cap.to)?.type === cap.captured;
+    const why = here && mv.captured && cap.to === mv.to
+      ? `There was a better way to win the ${pn(cap.captured)} on ${cap.to}, without giving material back.`
+      : `It misses a chance to win material${here ? ` — look at ${T}’s ${pn(cap.captured)} on ${cap.to}` : ''}.`;
+    return {
+      why,
+      refutation, motif: B.motif, kind: 'missed-win',
+    };
+  }
   const costs = end >= 1 && U.steps[end] ? positionalReasons(fen, U.steps[end].fenAfter, side) : [];
-  const evals = `the evaluation goes from ${evalText(winBefore)} to ${evalText(winAfter)}`;
+  const evals = `the evaluation goes from ${evalText(winBefore, side)} to ${evalText(winAfter, side)}`;
   if (costs.length && end >= 1) {
     return {
       why: `It doesn’t lose material, but after ${lineText(U.steps.slice(1, end + 1))}, ${joinAnd(costs)} (${evals}).`,
       refutation: '', motif: null, kind: 'positional',
     };
   }
+  const cost = winAfter >= 0.6 ? 'it lets much of your advantage slip'
+    : winAfter >= 0.4 ? (winBefore >= 0.6 ? `it lets ${T} back into the game` : 'it gives up your edge')
+      : `it gives ${T} the easier game`;
   return {
-    why: `It doesn’t lose material, but it gives ${T} the easier game: ${evals}.`,
+    why: `It doesn’t lose material, but ${cost}: ${evals}.`,
     refutation, motif: null, kind: 'positional',
   };
 }
 
 const times = (n) => (n === 1 ? 'once' : n === 2 ? 'twice' : `${n} times`);
 
-/** Expected score → "+0.4" / "−1.3" in pawns (inverse of the logistic model). */
-function evalText(w) {
+/**
+ * Expected score for `side` → "+0.4" / "−1.3" in pawns (inverse of the logistic model),
+ * always from White's point of view like the evaluation bar.
+ */
+function evalText(w, side = 'w') {
   const c = Math.min(0.999, Math.max(0.001, w));
-  const pawns = Math.log(c / (1 - c)) / 0.00368208 / 100;
+  const pawns = (side === 'w' ? 1 : -1) * Math.log(c / (1 - c)) / 0.00368208 / 100;
   if (Math.abs(pawns) < 0.05) return '0.0';
   return (pawns > 0 ? '+' : '−') + Math.abs(pawns).toFixed(1);
 }
@@ -250,13 +292,17 @@ const joinAnd = (xs) => (xs.length <= 1 ? xs[0] || '' : `${xs.slice(0, -1).join(
 
 /** Where a line "settles": the first quiet point after which material stops changing. */
 function settle(fen, pv) {
-  const U = analyzeLine(fen, pv, 12);
-  const settled = U.stables.filter((i) => i >= 1 && i <= 7);
+  const U = analyzeLine(fen, pv, 14);
+  // A check isn't a resting point: the combination usually goes on.
+  const settled = U.stables.filter((i) => i >= 1 && i <= 11 && !U.steps[i].check);
   if (!settled.length) return { U, end: Math.min(1, U.steps.length - 1) };
-  // Stop at the first quiet point; keep following only if a piece-sized swing comes later
-  // (e.g. winning the knight back) — not for stray pawn grabs.
+  // Stop at the first quiet point; keep following if a piece-sized swing comes later (e.g.
+  // winning the knight back), or a pawn soon after — not for stray pawn grabs deep in the line.
   let end = settled[0];
-  for (const i of settled) if (Math.abs(U.mats[i] - U.mats[end]) >= 2) end = i;
+  for (const i of settled) {
+    const swing = Math.abs(U.mats[i] - U.mats[end]);
+    if (swing >= 2 || (swing >= 1 && i <= 5)) end = i;
+  }
   return { U, end };
 }
 
@@ -290,7 +336,7 @@ export function explainConsequence({ fen, movePv, winAfter }) {
     const hits = threatsBy(boardOf(r1.fenAfter), r1.to).filter((x) => !x.check);
     if (hits.length) reply += `, attacking your ${hits.slice(0, 2).map((x) => `${pn(x.piece.type)} on ${x.square}`).join(' and ')}`;
   }
-  const outcome = balance(st.slice(0, end + 1), me, net);
+  const outcome = balance(st.slice(0, end + 1), me, net, materialBalance(fen, me));
   const notFree = g0 > 0 && net >= 0 && net < g0 && st[0].captured ? ` — the ${pn(st[0].captured)} wasn’t really free` : '';
   const sentences = [`${reply}.`];
   if (end >= 2) sentences.push(`After ${lineText(st.slice(2, end + 1))}, ${outcome}${notFree}.`);
@@ -299,7 +345,7 @@ export function explainConsequence({ fen, movePv, winAfter }) {
   if (costs.length) sentences.push(`But ${joinAnd(costs)}.`);
   else if (net >= 0 && winAfter < 0.42) sentences.push(`${Them} also gets the more comfortable position.`);
   const summary = `${lineText(st.slice(1, end + 1))}: ${outcome}${costs.length ? `, but ${joinAnd(costs)}` : ''}`;
-  return { text: sentences.join(' '), summary, net, g0, costs, telling: !!r1.captured || net !== g0 || costs.length > 0 };
+  return { text: sentences.join(' '), summary, net, g0, costs, telling: net !== g0 || net < 0 || costs.length > 0 };
 }
 
 const COUNT = ['', 'a', 'two', 'three', 'four', 'five'];
@@ -311,9 +357,12 @@ function pieceList(types) {
   return parts.length <= 1 ? parts[0] || '' : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
 }
 
-/** "material is level" / "you've given a knight for a pawn" / "you're a pawn up". */
-function balance(steps, me, net) {
-  if (net === 0) return 'material is level';
+/**
+ * What the line did to the material: "you’ve lost a knight", "you’ve given a knight for a
+ * pawn", "it comes out even". `before` is the balance before the line (for "level").
+ */
+function balance(steps, me, net, before = 0) {
+  if (net === 0) return before === 0 ? 'material is level' : 'the material comes out even';
   const got = [], gave = [];
   for (const s of steps) if (s.captured) (s.color === me ? got : gave).push(s.captured);
   for (let i = got.length - 1; i >= 0; i--) {
@@ -321,9 +370,10 @@ function balance(steps, me, net) {
     if (j >= 0) { gave.splice(j, 1); got.splice(i, 1); }
   }
   if (got.length && gave.length) return `you’ve given ${pieceList(gave).replace(/^the /, 'your ')} for ${pieceList(got)}`;
-  if (gave.length) return `you’re ${pieceList(gave).replace(/^the /, 'a ')} down`;
-  if (got.length) return `you’re ${pieceList(got).replace(/^the /, 'a ')} up`;
-  return net > 0 ? `you’re ${materialPhrase(net)} up` : `you’re ${materialPhrase(-net)} down`;
+  const level = before + net === 0 ? ' — material is level now' : '';
+  if (gave.length) return `you’ve lost ${pieceList(gave).replace(/^the /, 'your ')}${level}`;
+  if (got.length) return `you’ve won ${pieceList(got)}${level}`;
+  return net > 0 ? `you’ve won ${materialPhrase(net)}${level}` : `you’ve lost ${materialPhrase(-net)}${level}`;
 }
 
 /** "What is the opponent threatening?" — from a null-move search. */
@@ -335,8 +385,8 @@ export function explainThreat(fen, nullPv) {
   const T = COLOR_NAME[L.side];
   const s0 = L.steps[0];
   const first = prose(s0.color, s0.san);
-  const showTo = L.mateIdx >= 0 ? L.mateIdx + 1 : Math.max(1, Math.min(L.keyIdx + 1, 3));
-  const line = lineText(L.steps.slice(0, showTo));
+  // "If you passed" lines are hypothetical, so their moves are written without numbers.
+  const line = L.steps.slice(0, L.mateIdx + 1).map((s) => prose(s.color, s.san)).join(' ');
 
   const squares = new Set([s0.from, s0.to]);
   L.steps.slice(0, (L.keyIdx || 0) + 1).forEach((s) => { if (s.color === L.side && s.captured) squares.add(s.to); });
@@ -356,7 +406,11 @@ export function explainThreat(fen, nullPv) {
   let forkText = null;
   if (loose.length >= 2) {
     const byAttacker = new Map();
-    for (const h of loose) for (const a of attackersOf(B, h.square, L.side)) byAttacker.set(a, [...(byAttacker.get(a) || []), h]);
+    for (const h of loose) {
+      for (const a of attackersOf(B, h.square, L.side)) {
+        if ((see(B, h.square, L.side, a) ?? 0) > 0) byAttacker.set(a, [...(byAttacker.get(a) || []), h]); // this attacker itself wins it
+      }
+    }
     const [att, hits] = [...byAttacker.entries()].sort((x, y) => y[1].length - x[1].length)[0] || [];
     // Two loose pawns are only "the threat" if the engine's line actually goes after them.
     if (hits?.length >= 2 && (s0.from === att || hits.some((h) => h.piece.type !== 'p'))) {
@@ -377,7 +431,7 @@ export function explainThreat(fen, nullPv) {
       const cap = pn(B.get(att).type), vic = pn(top.piece.type);
       const defended = attackersOf(B, top.square, mine).length > 0 && top.gain < VALUES[top.piece.type];
       direct = {
-        text: `${T}’s ${cap} on ${att} attacks your ${vic} on ${top.square} — ${prose(mv.color, mv.san)} would ${defended ? `win it for the ${cap}` : 'win it outright'}.`,
+        text: `${T}’s ${cap} on ${att} attacks your ${vic} on ${top.square} — ${prose(mv.color, mv.san)} would ${defended ? `cost you the ${vic} for a ${cap}` : 'win it outright'}.`,
         move: { from: att, to: top.square, san: mv.san, color: mv.color, captured: top.piece.type },
         gain: top.gain,
       };
@@ -389,13 +443,20 @@ export function explainThreat(fen, nullPv) {
   if (L.mateIdx >= 0) text = `${T} threatens mate: ${line}.`;
   else if (forkText) text = forkText;
   else if (direct) text = direct.text;
+  else if (L.gain < 1) return null; // nothing to warn about
   else {
     const m = L.motif && L.motif.type !== 'hanging' ? L.motif : null;
     const tail = m ? motifTail(m) : null;
     const later = m && m.ply > 0 && L.steps[m.ply] ? prose(L.steps[m.ply].color, L.steps[m.ply].san) : null;
-    if (tail && later) text = `${T} threatens ${first} and then ${later} — ${tail} — winning ${winningsPhrase(L)}.`;
-    else if (tail) text = `${T} threatens ${first} — ${tail} — winning ${winningsPhrase(L)}.`;
-    else text = `${T} threatens ${first}, winning ${winningsPhrase(L)}.`;
+    // Say what the first move takes, and the next capture if it's part of the haul.
+    const caps = L.steps.slice(0, L.keyIdx + 1).filter((s) => s.color === L.side && s.captured);
+    const takes = s0.captured ? `, taking your ${pn(s0.captured)} on ${s0.to}` : '';
+    const next = s0.captured && caps[1] && !later ? ` — and then ${prose(caps[1].color, caps[1].san)} takes the ${pn(caps[1].captured)} on ${caps[1].to} too` : '';
+    const won = winningsPhrase(L);
+    const winning = (s0.captured && caps.length === 1 && won === `the ${pn(s0.captured)} on ${s0.to}`) || next ? '' : `winning ${won}`;
+    const lead = `${T} threatens ${first}${takes}${later ? ` and then ${later}` : ''}`;
+    if (tail) text = `${lead} — ${tail}${winning ? ` — ${winning}` : ''}.`;
+    else text = `${lead}${next}${winning ? `, ${winning}` : ''}.`;
   }
   return { text, squares: [...squares], move: direct?.move || s0, L, gain: direct ? Math.max(direct.gain, L.gain) : L.gain, mate: L.mateIdx >= 0 };
 }
@@ -449,7 +510,18 @@ export function describeQuietMove(fen, uci) {
   if (r.san.startsWith('O-O-O')) return 'castles queenside: the king gets safe and the rook comes to the centre';
   if (r.san.startsWith('O-O')) return 'castles: the king is safe and the rook joins the game';
 
-  const savedPiece = hangingPieces(before, side).find((h) => h.square === r.from || !hangingPieces(after, side).some((x) => x.square === h.square));
+  // Checks first: answering one, or giving one.
+  if (new Chess(fen).inCheck() && !r.captured) {
+    return r.piece === 'k' ? `steps the king out of check to ${r.to}` : `blocks the check with the ${pn(r.piece)} on ${r.to}`;
+  }
+  if (g.inCheck() && !r.captured) {
+    const hits = threatsBy(after, r.to).filter((t) => !t.check);
+    return hits.length ? `gives check and attacks the ${pn(hits[0].piece.type)} on ${hits[0].square}` : 'gives check';
+  }
+
+  let savedPiece = hangingPieces(before, side).find((h) => h.square === r.from || !hangingPieces(after, side).some((x) => x.square === h.square));
+  // Moving a loose piece to another square where it can be won isn't saving it.
+  if (savedPiece?.square === r.from && (see(after, r.to, opp(side)) ?? 0) > 0) savedPiece = null;
 
   if (r.captured) {
     const g2 = see(before, r.to, side, r.from) ?? 0;
@@ -484,7 +556,7 @@ export function describeQuietMove(fen, uci) {
     if (r.from[1] === backRank) return `develops the ${pn(r.piece)} to ${r.to}`;
   }
   if (r.piece === 'n' && rel >= 4 && rel <= 6 && isOutpost(after, r.to, side)) return `plants the knight on ${r.to}, an outpost no pawn can chase away`;
-  if (r.piece === 'r') {
+  if (r.piece === 'r' && r.from[0] !== r.to[0]) {
     const file = r.to[0];
     let own = 0, theirs = 0;
     for (let i = 1; i <= 8; i++) { const p = after.get(file + i); if (p?.type === 'p') (p.color === side ? own++ : theirs++); }
@@ -503,11 +575,14 @@ export function describeQuietMove(fen, uci) {
 function pieceRole(before, after, r, side) {
   const name = pn(r.piece);
   const reach = attacksFrom(after, r.to);
-  const targets = reach.map((s) => ({ s, p: after.get(s) })).filter((x) => x.p && x.p.color !== side && x.p.type !== 'k')
+  // Only a real target: something it could win, not a well-defended pawn.
+  const targets = reach.map((s) => ({ s, p: after.get(s) }))
+    .filter((x) => x.p && x.p.color !== side && x.p.type !== 'k' && (see(after, x.s, side, r.to) ?? 0) > 0)
     .sort((a, b) => VALUES[b.p.type] - VALUES[a.p.type]);
   if (targets.length) return `puts the ${name} on ${r.to}, aiming at the ${pn(targets[0].p.type)} on ${targets[0].s}`;
+  const guardedBefore = new Set(attacksFrom(before, r.from));
   const guards = reach.map((s) => ({ s, p: after.get(s) }))
-    .filter((x) => x.p && x.p.color === side && x.p.type !== 'k' && attackersOf(after, x.s, opp(side)).length)
+    .filter((x) => x.p && x.p.color === side && x.p.type !== 'k' && !guardedBefore.has(x.s) && attackersOf(after, x.s, opp(side)).length)
     .sort((a, b) => VALUES[b.p.type] - VALUES[a.p.type]);
   if (guards.length) return `puts the ${name} on ${r.to}, where it protects the ${pn(guards[0].p.type)} on ${guards[0].s}`;
   const was = attacksFrom(before, r.from).length;

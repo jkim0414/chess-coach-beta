@@ -51,9 +51,39 @@ export function attackersOf(B, target, color) {
   return out;
 }
 
+/**
+ * If the piece on `s` is pinned to its own king, the squares of the pin line (between the
+ * king and the pinner, pinner included) — the only squares it can legally capture on.
+ */
+function pinLine(B, s) {
+  const p = B.get(s);
+  if (!p || p.type === 'k') return null;
+  const k = [...B].find(([, q]) => q.type === 'k' && q.color === p.color)?.[0];
+  if (!k) return null;
+  const [kf, kr] = coords(k), [sf, sr] = coords(s);
+  if (!(kf === sf || kr === sr || Math.abs(sf - kf) === Math.abs(sr - kr))) return null;
+  const df = Math.sign(sf - kf), dr = Math.sign(sr - kr);
+  const line = [];
+  for (let f = kf + df, r = kr + dr; f !== sf || r !== sr; f += df, r += dr) {
+    if (B.has(sq(f, r))) return null;
+    line.push(sq(f, r));
+  }
+  for (let f = sf + df, r = sr + dr; onBoard(f, r); f += df, r += dr) {
+    const q = sq(f, r);
+    line.push(q);
+    const x = B.get(q);
+    if (!x) continue;
+    const slider = df === 0 || dr === 0 ? 'r' : 'b';
+    return x.color !== p.color && (x.type === 'q' || x.type === slider) ? line : null;
+  }
+  return null;
+}
+
 function leastValuableAttacker(B, target, color) {
   let best = null;
   for (const s of attackersOf(B, target, color)) {
+    const pin = pinLine(B, s);
+    if (pin && !pin.includes(target)) continue; // pinned to its king: it can't take
     if (!best || SEE_VAL[B.get(s).type] < SEE_VAL[B.get(best).type]) best = s;
   }
   return best;
@@ -220,7 +250,7 @@ export function motifsOfMove(fenBefore, uci) {
   if (directCheck && discCheck) motifs.push({ type: 'double-check' });
   // Two loose pawns attacked at once isn't what anyone means by a fork.
   const forkWorthy = threats.some((t) => t.check || t.piece.type !== 'p');
-  if (threats.length >= 2 && forkWorthy && (movedSafe || directCheck)) {
+  if (threats.length >= 2 && forkWorthy && movedSafe) {
     motifs.push({ type: 'fork', piece: r.piece, square: r.to, targets: threats.slice(0, 3) });
   }
   if (disc.length) {
@@ -278,10 +308,19 @@ export function analyzeLine(fen, pv, maxPlies = 12) {
   else if (gain > 0) keyIdx = bankedAt;
   if (steps[keyIdx]?.color !== side) keyIdx = Math.max(0, keyIdx - 1);
 
+  // A motif only explains the line if the line then cashes in on one of its targets.
+  const targetsOf = (m) => (m.type === 'fork' ? m.targets.map((t) => t.square)
+    : m.type === 'discovered' ? [m.target]
+      : m.type === 'skewer' ? [m.front.square, m.behind.square] : null);
+  const cashed = (m, i) => {
+    const ts = targetsOf(m);
+    if (!ts) return true;
+    return steps.slice(i, keyIdx + 1).some((s) => s.color === side && s.captured && ts.includes(s.to));
+  };
   let motif = null;
   for (let i = 0; i <= Math.min(keyIdx, 4) && !motif; i += 2) {
     const ms = steps[i] ? motifsOfMove(steps[i].fenBefore, steps[i].uci) : [];
-    const pick = ms.find((m) => m.type !== 'check');
+    const pick = ms.find((m) => m.type !== 'check' && cashed(m, i));
     if (pick) motif = { ...pick, ply: i };
   }
   if (mateIdx >= 0) {

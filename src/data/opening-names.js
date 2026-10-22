@@ -180,7 +180,7 @@ export default [
   { name: 'Caro-Kann Defence, Panov Attack', eco: 'B13', moves: 'e4 c6 d4 d5 exd5 cxd5 c4', idea: 'White plays c4 to hit d5, often getting an isolated d4 pawn. White aims for kingside play; Black blockades d5 and targets d4.' },
   { name: 'Caro-Kann Defence, 3.Nc3', eco: 'B15', moves: 'e4 c6 d4 d5 Nc3', idea: 'White protects e4 with a piece. Black usually takes on e4, gaining time on the knight, then develops ...Bf5, ...Nd7 or ...Nf6.' },
   { name: 'Caro-Kann Defence, Main Line 4.Nxe4', eco: 'B15', moves: 'e4 c6 d4 d5 Nc3 dxe4 Nxe4', idea: 'White has a free centre pawn on d4; Black has a solid c6-e6 structure. Black chooses ...Bf5, ...Nd7 or ...Nf6.' },
-  { name: 'Caro-Kann Defence, Karpov Variation', eco: 'B17', moves: 'e4 c6 d4 d5 Nc3 dxe4 Nxe4 Nd7', idea: 'Black prepares ...Ngf6 so a trade on f6 can be met by ...Nxf6. Solid; after Ng5 and Bd3, beware ...h6?? Ne6! with Bg6# ideas.' },
+  { name: 'Caro-Kann Defence, Karpov Variation', eco: 'B17', moves: 'e4 c6 d4 d5 Nc3 dxe4 Nxe4 Nd7', idea: 'Black prepares ...Ngf6 so a trade on f6 can be met by ...Nxf6. Solid. A known idea: after Ng5, Bd3 and ...e6, the move ...h6 allows the sacrifice Nxe6! with Bg6+ (Deep Blue–Kasparov, 1997).' },
   { name: 'Caro-Kann Defence, Classical Variation', eco: 'B18', moves: 'e4 c6 d4 d5 Nc3 dxe4 Nxe4 Bf5', idea: 'The bishop develops with tempo on the knight. After Ng3 Bg6 White gains space with h4-h5; Black plays ...Nd7, ...e6 and ...Ngf6.' },
   { name: 'Caro-Kann Classical, Main Line', eco: 'B19', moves: 'e4 c6 d4 d5 Nc3 dxe4 Nxe4 Bf5 Ng3 Bg6 h4 h6 Nf3 Nd7 h5 Bh7', idea: 'After Bd3 Bxd3 Qxd3 White castles long with space; Black plays ...e6, ...Ngf6, ...Qc7 and ...O-O-O with a very solid position.' },
 
@@ -228,7 +228,7 @@ export default [
   { name: "Queen's Gambit Accepted", eco: 'D20', moves: 'd4 d5 c4 dxc4', idea: 'Black takes the pawn but does not try to keep it, aiming to strike back with ...c5 or ...e5 and fast development.' },
   { name: "Queen's Gambit Accepted, Central Variation", eco: 'D20', moves: 'd4 d5 c4 dxc4 e4', idea: 'White grabs the full centre. Black hits it at once with ...e5, ...Nf6 or ...c5; the d4 and e4 pawns can become targets.' },
   { name: "Queen's Gambit Accepted, 3.Nf3", eco: 'D21', moves: 'd4 d5 c4 dxc4 Nf3', idea: 'White stops ...e5 and prepares e3 and Bxc4. Black plays ...Nf6, ...e6 and ...c5, often with ...a6 and ...b5.' },
-  { name: "Queen's Gambit Accepted, Classical", eco: 'D27', moves: 'd4 d5 c4 dxc4 Nf3 Nf6 e3 e6 Bxc4 c5', idea: 'Black strikes at d4. White often gets an isolated d-pawn after exchanges and plays for e4-e5 or d5; Black blockades d5.' },
+  { name: "Queen's Gambit Accepted, Classical", eco: 'D27', moves: 'd4 d5 c4 dxc4 Nf3 Nf6 e3 e6 Bxc4 c5', idea: 'Black strikes at d4. After exchanges White often gets an isolated d-pawn and plays for d4-d5 and kingside attacks; Black blockades d5.' },
   { name: "Queen's Gambit Declined", eco: 'D30', moves: 'd4 d5 c4 e6', idea: 'Black supports d5 with the e-pawn, accepting a passive c8 bishop for a rock-solid centre. Black aims for ...c5 or ...dxc4 and ...e5 later.' },
   { name: "Queen's Gambit Declined, Triangle System", eco: 'D31', moves: 'd4 d5 c4 e6 Nc3 c6', idea: 'Black builds the c6-d5-e6 triangle, keeping ...dxc4 and ...b5 ideas (Noteboom). White chooses Nf3, e3 or the sharp e4.' },
   { name: 'Tarrasch Defence', eco: 'D32', moves: 'd4 d5 c4 e6 Nc3 c5', idea: 'Black accepts an isolated d-pawn after cxd5 exd5 in return for free piece play and open lines. White blockades d5 and targets it.' },

@@ -152,7 +152,7 @@ function summary(s) {
 
 /** Exactly the strings the coach panel renders for this callout (see CoachPanel.jsx). */
 function shownText(a) {
-  if (a.kind === 'threat') return a.state === 'asking' ? [] : [a.threat?.text, a.threat?.recapture];
+  if (a.kind === 'threat') return a.state === 'asking' ? [] : [a.threat?.text, a.threat?.recapture, a.threat?.counter];
   if (a.kind === 'moment') return [a.type !== 'hint' && a.title, a.text, a.hintText];
   if (a.kind === 'intervention') return a.mode === 'decide' ? [a.title, a.why, a.refutation, a.retryNote, a.hintText] : [a.title, a.retryNote, a.hintText];
   if (a.kind === 'drill') return [a.text];
@@ -214,7 +214,7 @@ async function probeTurn(probe, t, gameId, s, rec, rng) {
     for (const uci of cands) {
       const m = await probe.analyze(fen, { depth: 14, searchmoves: [uci], movetime: 3000 });
       if (!m?.lines[0]) continue;
-      const args = { fen, uci, movePv: m.lines[0].pv, winBefore: winOf(best.score), winAfter: winOf(m.lines[0].score) };
+      const args = { fen, uci, movePv: m.lines[0].pv, winBefore: winOf(best.score), winAfter: winOf(m.lines[0].score), bestPv: best.pv, bestScore: best.score };
       rec({
         type: 'mistake', gameId, ply: s.plies.length, fen, uci, san: uciToSan(fen, uci), movePv: m.lines[0].pv, score: m.lines[0].score, bestScore: best.score,
         lossWin: +(args.winBefore - args.winAfter).toFixed(3),
@@ -226,9 +226,9 @@ async function probeTurn(probe, t, gameId, s, rec, rng) {
     if (nf) {
       const tr = await probe.analyze(nf, { depth: 10, movetime: 800 });
       const raw = tr?.lines[0] ? explainThreat(fen, tr.lines[0].pv) : null;
-      const confirmed = raw && (await confirmThreat(probe, fen, raw));
+      const confirmed = raw && (await confirmThreat(probe, fen, raw, tr.lines[0].score));
       const th = confirmed || raw, real = !!confirmed;
-      if (th) rec({ type: 'threat', gameId, ply: s.plies.length, fen, nullPv: tr.lines[0].pv, text: [th.text, th.recapture].filter(Boolean).join(' '), real, squares: th.squares, move: { from: th.move.from, to: th.move.to, san: th.move.san }, gain: th.gain, mate: th.mate });
+      if (th) rec({ type: 'threat', gameId, ply: s.plies.length, fen, nullPv: tr.lines[0].pv, text: [th.text, th.recapture, th.counter].filter(Boolean).join(' '), real, squares: th.squares, move: { from: th.move.from, to: th.move.to, san: th.move.san }, gain: th.gain, mate: th.mate });
     }
   } catch (e) {
     rec({ type: 'error', gameId, ply: s.plies.length, fen, error: String(e?.stack || e) });

@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { createNodeEngine } from './nodeWorker.js';
 import { planOf, planSync, describePlan, planHints } from '../src/lib/plan.js';
-import { motifsOfMove } from '../src/lib/tactics.js';
+import { motifsOfMove, hangingPieces, boardOf } from '../src/lib/tactics.js';
 import { describeQuietMove } from '../src/lib/explain.js';
 import { GameController, threatCheckApplies, isRealThreat, confirmThreat } from '../src/play/controller.js';
 import { explainThreat, explainConsequence, explainMistake, naiveRecapture, recaptureNote } from '../src/lib/explain.js';
@@ -163,7 +163,7 @@ describe('threat wording', () => {
   it('names the simple threat to a hanging piece first', async () => {
     const res = await engine.analyze(nullMoveFen(QUEEN_ATTACKED), { depth: 12 });
     const th = explainThreat(QUEEN_ATTACKED, res.lines[0].pv);
-    expect(th.text).toBe('Black’s rook on h7 attacks your queen on g7 — …Rxg7 would win it for the rook.');
+    expect(th.text).toBe('Black’s rook on h7 attacks your queen on g7 — …Rxg7 would cost you the queen for a rook.');
     expect(th.move).toMatchObject({ from: 'h7', to: 'g7' });
     expect(th.squares).toEqual(expect.arrayContaining(['g7', 'h7']));
     expect(isRealThreat(th)).toBe(true);
@@ -247,7 +247,7 @@ describe('threats found by the coaching audit', () => {
     // Nxe4 looks like a trade (…Qxe4), but Re1 then pins the queen.
     const fen = 'r3kb1r/2pnqpp1/bp1p3p/3P4/4n3/2N3BN/PPP2QPP/R2K3R b kq - 1 16';
     const th = explainThreat(fen, ['c3e4', 'd7e5', 'h3f4', 'e7d7', 'g3h4', 'f8e7', 'h4e7', 'd7e7']);
-    expect(th.text).toBe('White threatens Nxe4, winning the knight on e4.');
+    expect(th.text).toBe('White threatens Nxe4, taking your knight on e4.');
     const rc = naiveRecapture(fen, th);
     expect(rc.san).toBe('Qxe4');
     const r = await engine.analyze(rc.fen, { depth: 12 });
@@ -265,6 +265,50 @@ describe('threats found by the coaching audit', () => {
 
   it('describes a discovered check without garbling the sentence', () => {
     const th = explainThreat('rn2k2r/pp2qppp/2pbb1n1/8/Q1BP4/2N2N2/PP3PPP/R1B1K2R w KQkq - 0 11', ['e6c4', 'c1e3', 'b7b5', 'a4c2']);
-    expect(th.text).toBe('Black threatens …Bxc4+ — a discovered check from the queen on e7 — winning the bishop on c4.');
+    expect(th.text).toBe('Black threatens …Bxc4+, taking your bishop on c4 — a discovered check from the queen on e7.');
   });
+});
+
+describe('found by the coaching review', () => {
+  it('a pinned pawn is no attacker', () => {
+    // The c5 pawn is pinned to its king by the queen on c3, so it can't take on d4 (and
+    // …Rxd4 loses the rook to exd4).
+    expect(hangingPieces(boardOf('2kr4/8/8/2p5/3P4/2Q1P3/8/4K3 w - - 0 1'), 'w')).toEqual([]);
+  });
+
+  it('counts your own capture: Rxb7+ wins the queen for a rook, it doesn’t "hang" the rook', async () => {
+    const fen = 'r5nr/Rqk4p/1pp5/2p1Pp2/2N2B1N/3P3P/1PP2PP1/6K1 w - - 0 25';
+    const best = await engine.analyze(fen, { depth: 16 });
+    const mine = await engine.analyze(fen, { depth: 14, searchmoves: ['a7b7'] });
+    const ex = explainMistake({ fen, uci: 'a7b7', movePv: mine.lines[0].pv, winBefore: winOf(best.lines[0].score), winAfter: winOf(mine.lines[0].score), bestPv: best.lines[0].pv, bestScore: best.lines[0].score });
+    expect(ex.kind).not.toBe('hangs');
+    expect(ex.why).toBe('There was a better way to win the queen on b7, without giving material back.');
+  }, 60000);
+
+  it('quotes evaluations from White’s point of view, like the bar', () => {
+    const ex = explainMistake({ fen: 'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1', uci: 'a7a6', movePv: ['a7a6'], winBefore: 0.5, winAfter: 0.35 });
+    expect(ex.why).toMatch(/from 0\.0 to \+\d\.\d/);
+  });
+
+  it('does not stop you for a threat when you have mate yourself', async () => {
+    const fen = '3r4/5ppk/p7/1p2P2p/1P5P/6q1/7r/1K1RR3 b - - 0 40';
+    const res = await engine.analyze(nullMoveFen(fen), { depth: 10 });
+    const th = explainThreat(fen, res.lines[0].pv);
+    expect(await confirmThreat(engine, fen, th, res.lines[0].score)).toBe(null);
+  }, 30000);
+
+  it('does not call a rook-and-knight haul "the exchange"', () => {
+    const th = explainThreat('5rn1/1p1b2Q1/3bkp1p/3pB3/8/5NP1/5P2/R5K1 b - - 0 37', ['e5d6', 'e6d6', 'g7f8', 'd6c7', 'f8g8']);
+    expect(th.text).not.toMatch(/exchange/);
+  });
+
+  it('gives a real first hint for a capture, and says when you are being mated', async () => {
+    const fen = '2br2r1/2pk3p/8/1P1p1p1q/3p3P/6P1/2PK4/5R2 b - - 3 36';
+    const r = await engine.analyze(fen, { depth: 14 });
+    const hints = planHints(await planOf(engine, fen, r.lines[0].pv, { opponentThreat: true }));
+    expect(hints[0].text).not.toMatch(/No tactic here/);
+    const mated = '8/2R4k/1R3p2/3B2pp/p4B2/P2KP3/6PP/8 b - - 1 31';
+    const m = await engine.analyze(mated, { depth: 12 });
+    expect(describePlan(await planOf(engine, mated, m.lines[0].pv, { opponentThreat: true }))).toMatch(/forced mate whatever you play/);
+  }, 60000);
 });

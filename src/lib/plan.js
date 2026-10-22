@@ -3,7 +3,7 @@
 // Also builds the hint ladder (target → piece → move + idea) from the same analysis.
 import { analyzeLine, boardOf, attackersOf, pinnedBy, motifsOfMove, see } from './tactics.js';
 import { Chess } from 'chess.js';
-import { nullMoveFen, formatLine, NAMES, COLOR_NAME, opp, playLine, lineText } from './chessutil.js';
+import { nullMoveFen, formatLine, NAMES, COLOR_NAME, opp, playLine, lineText, materialBalance } from './chessutil.js';
 import { describeMotif, describeQuietMove, winningsPhrase, capitalize, explainThreat, MOTIFS, prose, motifTail } from './explain.js';
 
 const pn = (t) => NAMES[t];
@@ -36,7 +36,8 @@ export async function planOf(engine, fen, pv, { opponentThreat = false } = {}) {
     const nf = nullMoveFen(fen);
     const res = nf ? await engine.analyze(nf, { depth: 10, movetime: 800 }) : null;
     const th = res?.lines[0] ? explainThreat(fen, res.lines[0].pv) : null;
-    if (th && (th.mate || th.gain >= 2)) plan.oppThreat = th;
+    // Same bar as the threat question: a capture or a mate, not "threatens to threaten".
+    if (th && (th.mate || (th.gain >= 2 && th.move?.captured))) plan.oppThreat = th;
   }
   return plan;
 }
@@ -136,6 +137,7 @@ export function describePlan(plan, { userMove } = {}) {
   const first = num(s0);
   const Them = COLOR_NAME[opp(L.side)];
   const out = [];
+  if (L.gain === -99) return `${first} holds out longest, but ${Them} has a forced mate whatever you play.`;
 
   if (L.mateIdx >= 0) {
     const n = Math.floor(L.mateIdx / 2) + 1;
@@ -144,20 +146,34 @@ export function describePlan(plan, { userMove } = {}) {
     return out.join(' ');
   }
 
+  // What a capture achieves depends on where material stands now: in the middle of a trade,
+  // taking back is "winning the material back", not winning.
+  const bal0 = materialBalance(fen, L.side);
+  const wins = (S, idx) => {
+    if (S.promotion && !S.captured) return 'queens the pawn';
+    const bal1 = bal0 + L.gain;
+    if (bal0 <= -1) return bal1 > 0.5 ? 'wins the material back, and more' : bal1 >= -0.5 ? 'wins the material back' : 'wins back some of the material';
+    const ours = steps.slice(0, idx + 1).filter((s) => s.color === L.side && s.captured).length;
+    return ours > 1 ? `completes it — you’ve won ${winningsPhrase(L)} in all` : `wins ${winningsPhrase(L)}`;
+  };
+
   const m0 = motifsOfMove(fen, s0.uci).find((m) => SHOWN_MOTIFS.includes(m.type));
-  if (m0) out.push(`${capitalize(describeMotif(m0, steps, first))}.`);
-  else if (s0.captured && L.gain >= 1 && L.keyIdx === 0) {
-    const why = captureReasons(fen, L, 0);
-    out.push(`${first} wins ${winningsPhrase(L)}${why.length ? `: ${why.join(', and ')}` : ''}.`);
+  const capWins = s0.captured && L.gain >= 1 && L.keyIdx === 0;
+  let quiet = null;
+  if (m0 && capWins && motifTail(m0)) out.push(`${first} ${wins(s0, 0)}, ${motifTail(m0)}.`);
+  else if (m0) out.push(`${capitalize(describeMotif(m0, steps, first))}.`);
+  else if (capWins) {
+    const why = bal0 <= -1 ? [] : captureReasons(fen, L, 0);
+    out.push(`${first} ${wins(s0, 0)}${why.length ? `: ${why.join(', and ')}` : ''}.`);
   } else if (threat) out.push(`${first} ${threatClause(threat)}.`);
-  else out.push(`${first} ${describeQuietMove(fen, s0.uci)}.`);
+  else out.push(`${first} ${(quiet = describeQuietMove(fen, s0.uci))}.`);
 
   // Did the move deal with the opponent's threat, or leave it (because something matters more)?
   if (plan.oppThreat?.mate && !m0) {
     // A good move here has to stop the mate; only say so if we're not lost anyway.
     const tm = plan.oppThreat.move;
     if (plan.win === undefined || plan.win > 0.1) out.push(`It also stops ${Them}’s mating attack (which starts ${tm.color ? prose(tm.color, tm.san) : tm.san}).`);
-  } else if (plan.oppThreat && !m0 && L.gain < 1) {
+  } else if (plan.oppThreat && !m0 && L.gain < 1 && !(quiet?.includes('out of danger') && plan.oppThreat.move?.to === s0.from)) {
     const tm = plan.oppThreat.move;
     if (!threatPersists(s0.fenAfter, tm)) {
       out.push(`It also takes care of the threat — ${plan.oppThreat.text.replace(/^(\w+) threatens/, (x, who) => `${who} was threatening`)}`);
@@ -168,21 +184,19 @@ export function describePlan(plan, { userMove } = {}) {
   }
 
   const r1 = steps[1];
-  // A payoff that is a pawn queening, not a capture, is described as such.
-  const wins = (S) => (S.promotion && !S.captured ? 'queens the pawn' : `wins ${winningsPhrase(L)}`);
   if (L.gain >= 1 && L.keyIdx === 2) {
     const S = steps[2];
     const why = captureReasons(fen, L, 2);
     out.push(why.caused
-      ? `${Them}’s best answer is ${num(r1)} — but ${why.join(', and ')}, so ${num(S)} ${wins(S)}.`
-      : `${Them}’s best answer is ${num(r1)}, and then ${num(S)} ${wins(S)}${why.length ? ` (${why.join(', and ')})` : ''}.`);
+      ? `${Them}’s best answer is ${num(r1)} — but ${why.join(', and ')}, so ${num(S)} ${wins(S, 2)}.`
+      : `${Them}’s best answer is ${num(r1)}, and then ${num(S)} ${wins(S, 2)}${why.length ? ` (${why.join(', and ')})` : ''}.`);
   } else if (L.gain >= 1 && L.keyIdx === 4) {
     const why = captureReasons(fen, L, 4);
-    out.push(`${Them}’s best answer is ${num(r1)}; then after ${lineText(steps.slice(2, 4))}, ${num(steps[4])} ${wins(steps[4])}${why.length ? ` (${why.join(', and ')})` : ''}.`);
+    out.push(`${Them}’s best answer is ${num(r1)}; then after ${lineText(steps.slice(2, 4))}, ${num(steps[4])} ${wins(steps[4], 4)}${why.length ? ` (${why.join(', and ')})` : ''}.`);
   } else if (threat && r1) {
     out.push(`${Them}’s best answer is ${num(r1)}.`);
   } else if (steps.length > 1 && !m0 && !(s0.captured && L.keyIdx === 0)) {
-    out.push(`A likely continuation: ${lineText(steps.slice(0, 4))}.`);
+    out.push(`A likely continuation: ${lineText(steps.slice(0, continuationLength(steps)))}.`);
   }
 
   if (userMove && userMove !== s0.uci) {
@@ -195,11 +209,21 @@ export function describePlan(plan, { userMove } = {}) {
   return out.join(' ');
 }
 
+/** About four moves — but don't stop right after a check or in the middle of a trade. */
+function continuationLength(steps) {
+  let n = Math.min(4, steps.length);
+  while (n < Math.min(steps.length, 7) && (steps[n - 1].check || (steps[n]?.captured && steps[n].to === steps[n - 1].to))) n++;
+  return n;
+}
+
 /** "Your knight isn't doing much" style goals for quiet moves, without naming the move. */
 function quietGoal(fen, s0, Them) {
   const d = describeQuietMove(fen, s0.uci);
   const m = (re) => d.match(re);
   let x;
+  if (/out of check|blocks the check/.test(d)) return 'You’re in check. Of the ways out, which keeps your position together?';
+  if ((x = m(/^gives check and attacks the (\w+) on ([a-h][1-8])/))) return { text: `${Them}’s ${x[1]} on ${x[2]} can be attacked — with check.`, targets: [x[2]] };
+  if (/^gives check/.test(d)) return MOTIFS.check.hint;
   if (/^castles/.test(d)) return 'Your king is still in the centre. Get it safe first.';
   if ((x = m(/^develops the (\w+)/))) return `You still have an undeveloped ${x[1]}. Bring it into the game.`;
   if (/claims the centre/.test(d)) return 'The centre is up for grabs — stake a claim with a pawn.';
@@ -208,8 +232,8 @@ function quietGoal(fen, s0, Them) {
   if (/7th rank/.test(d)) return 'Your rook can invade the 7th rank.';
   if (/outpost/.test(d)) return 'There’s a square where a knight can’t be chased away. Find it.';
   if ((x = m(/attacks the (\w+) on ([a-h][1-8])/))) return { text: `${Them}’s ${x[1]} on ${x[2]} can be attacked.`, targets: [x[2]] };
-  if ((x = m(/protects the (\w+) on ([a-h][1-8])/))) return { text: `Your ${x[1]} on ${x[2]} is under attack. Look after it.`, targets: [x[2]] };
-  if (/out of danger/.test(d)) return 'One of your pieces is under attack.';
+  if ((x = m(/^protects the (\w+) on ([a-h][1-8])/))) return { text: `Your ${x[1]} on ${x[2]} is under attack. Look after it.`, targets: [x[2]] };
+  if ((x = m(/moves the (\w+) out of danger/))) return `Your ${x[1]} is under attack.`;
   if (/passed pawn/.test(d)) return 'You have a passed pawn. Passed pawns must be pushed.';
   if (/pawn storm/.test(d)) return 'Your pawns can join the attack on the king.';
   if (/fianchettoes/.test(d)) return 'Your bishop wants the long diagonal.';
@@ -220,7 +244,7 @@ function quietGoal(fen, s0, Them) {
   if (/escape square/.test(d)) return 'Your king could use some breathing room.';
   if (/away from .*pieces/.test(d)) return `Some of ${Them}’s pieces want to come forward. Take their squares away.`;
   if ((x = m(/aiming at the (\w+) on ([a-h][1-8])/))) return { text: `${Them}’s ${x[1]} on ${x[2]} is a target. Bring another piece to bear on it.`, targets: [x[2]] };
-  if (/where it protects/.test(d)) return 'One of your pieces needs more protection.';
+  if ((x = m(/where it protects the (\w+) on ([a-h][1-8])/))) return { text: `Your ${x[1]} on ${x[2]} could use another defender.`, targets: [x[2]] };
   return 'No tactic here. Find your least useful piece and give it a better job.';
 }
 
@@ -238,14 +262,15 @@ export function planHints(plan, { motif = null } = {}) {
   const piece = pn(B.get(s0.from).type);
 
   let h1, targets = [];
-  if (L.mateIdx >= 0) h1 = MOTIFS.mate.hint;
+  if (L.gain === -99) h1 = 'There’s no escaping the mating attack. Find the move that holds out longest.';
+  else if (L.mateIdx >= 0) h1 = MOTIFS.mate.hint;
   else if (motif && MOTIFS[motif] && !['material', 'check'].includes(motif)) h1 = MOTIFS[motif].hint;
   else if (oppThreat && L.gain < 1 && !threat) {
     const tm = oppThreat.move;
     const first = tm?.san ? (tm.color ? prose(tm.color, tm.san) : tm.san) : null;
     h1 = oppThreat.mate
       ? `First deal with ${Them}’s threat: there’s a mating attack coming${first ? `, starting with ${first}` : ''}.`
-      : `First deal with ${Them}’s threat${first ? `: ${first}` : ''}. What does it attack, and how can you meet it?`;
+      : `First deal with ${Them}’s threat${first ? `: ${first}` : ''}. ${tm?.san?.includes('x') ? 'What would it take' : 'What does it attack'}, and how can you meet it?`;
     targets = oppThreat.squares.filter((sq) => sq !== s0.to && sq !== s0.from);
   } else if (threat) {
     const t0 = threat.steps[0];
@@ -257,16 +282,24 @@ export function planHints(plan, { motif = null } = {}) {
     } else h1 = 'Find a move that creates a threat your opponent has to answer.';
   } else if (L.gain >= 1 && L.keyIdx <= 4) {
     const S = L.steps[L.keyIdx];
+    const victim = B.get(S.to);
     if (S.promotion && !S.captured) {
       h1 = 'You have a passed pawn close to queening. What stands in its way?';
     } else if (L.keyIdx > 0 && S.to === s0.to) {
       h1 = MOTIFS.material.hint; // naming the square would give the move away
+    } else if (!victim || victim.color === L.side || victim.type !== S.captured) {
+      // The target isn't there yet (it gets there during the line), so a square means nothing.
+      h1 = s0.captured ? captureHint(s0, Them) : MOTIFS.material.hint;
+      if (s0.captured) targets = [s0.to];
     } else {
       targets = [S.to];
-      h1 = L.keyIdx === 0
+      h1 = L.keyIdx === 0 || !captureReasons(fen, L, L.keyIdx).caused
         ? `Look at ${S.to}: count its attackers and defenders.`
         : `Look at ${S.to}: count its attackers and defenders — and notice what happens when one of the defenders has to move.`;
     }
+  } else if (s0.captured && L.gain > -1) {
+    h1 = captureHint(s0, Them);
+    targets = [s0.to];
   } else {
     const g = quietGoal(fen, s0, Them);
     h1 = typeof g === 'string' ? g : g.text;
@@ -281,6 +314,10 @@ export function planHints(plan, { motif = null } = {}) {
     { text: `It’s a ${piece} move: your ${piece} on ${s0.from}.`, marks: { ...marks1, [s0.from]: 'hint' }, arrows: [] },
     { text: describePlan(plan), marks: {}, arrows: arrows3 },
   ];
+}
+
+function captureHint(s0, Them) {
+  return `${Them}’s ${pn(s0.captured)} on ${s0.to} is weaker than it looks. Count its attackers and defenders.`;
 }
 
 /**
