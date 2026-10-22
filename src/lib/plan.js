@@ -1,7 +1,8 @@
 // "What's the idea?" — explains a move the way a coach would: what it threatens and why
 // that threat works, how the opponent should answer, and why the follow-up then wins.
 // Also builds the hint ladder (target → piece → move + idea) from the same analysis.
-import { analyzeLine, boardOf, attackersOf, pinnedBy, motifsOfMove } from './tactics.js';
+import { analyzeLine, boardOf, attackersOf, pinnedBy, motifsOfMove, see } from './tactics.js';
+import { Chess } from 'chess.js';
 import { nullMoveFen, formatLine, NAMES, COLOR_NAME, opp, playLine, lineText } from './chessutil.js';
 import { describeMotif, describeQuietMove, winningsPhrase, capitalize, explainThreat, MOTIFS } from './explain.js';
 
@@ -26,8 +27,9 @@ export async function planOf(engine, fen, pv, { opponentThreat = false } = {}) {
     const res = nf ? await engine.analyze(nf, { depth: 10, movetime: 800 }) : null;
     if (res?.lines[0]) {
       const T = analyzeLine(nf, res.lines[0].pv, 8);
-      // Only direct threats (a capture or mate next move) — "threatens Rg3, then…" teaches nothing.
-      if (T.mateIdx >= 0 || (T.gain >= 1 && T.steps[0]?.captured)) plan.threat = T;
+      // Only direct threats (a capture or mate next move) — "threatens Rg3, then…" teaches nothing —
+      // and only ones the move itself creates: a capture that was already on before isn't its threat.
+      if ((T.mateIdx >= 0 || (T.gain >= 1 && T.steps[0]?.captured)) && createdBy(fen, T)) plan.threat = T;
     }
   }
   if (opponentThreat) {
@@ -37,6 +39,18 @@ export async function planOf(engine, fen, pv, { opponentThreat = false } = {}) {
     if (th && (th.mate || th.gain >= 2)) plan.oppThreat = th;
   }
   return plan;
+}
+
+/** Was the threat's first move already available (and already winning) before our move? */
+function createdBy(fen, threat) {
+  const t0 = threat.steps[0];
+  if (!t0) return false;
+  let before = null;
+  try { before = new Chess(fen).move({ from: t0.from, to: t0.to, promotion: t0.promotion || undefined }); } catch { before = null; }
+  if (!before) return true; // wasn't even legal: the move made it possible
+  if (threat.mateIdx >= 0) return !before.san.includes('#');
+  if (!before.captured) return true;
+  return (see(boardOf(fen), t0.to, threat.side, t0.from) ?? 0) <= 0; // it used to lose material
 }
 
 /** Synchronous plan without engine extras (no threat search). */
@@ -58,6 +72,7 @@ function captureReasons(fen, L, idx) {
     const j = L.steps.findIndex((s, k) => k < idx && (s.from === d || (s.to === d && s.captured)));
     if (j < 0) continue;
     const s = L.steps[j];
+    if (s.from === d && s.to === sq) continue; // that piece moved onto the square — it's what gets taken
     const who = pn(B0.get(d).type);
     reasons.push(s.from === d ? `after ${num(s)} the ${who} no longer guards ${sq}` : `${num(s)} removes the ${who} that guarded ${sq}`);
   }
@@ -67,7 +82,9 @@ function captureReasons(fen, L, idx) {
   let count = null;
   if (live === 0) count = `nothing defends ${sq}`;
   else if (attN.length > live) count = `${sq} is attacked ${times(attN.length)} and defended only ${times(live)}`;
-  return [...reasons, count].filter(Boolean);
+  const all = [...reasons, count].filter(Boolean);
+  all.caused = reasons.length > 0; // the line itself took a defender away (vs. it was always loose)
+  return all;
 }
 
 /** If the threat's capture couldn't be answered by recapturing because the defender is pinned. */
@@ -146,9 +163,9 @@ export function describePlan(plan, { userMove } = {}) {
   if (L.gain >= 1 && L.keyIdx === 2) {
     const S = steps[2];
     const why = captureReasons(fen, L, 2);
-    out.push(why.length
+    out.push(why.caused
       ? `${Them}’s best answer is ${num(r1)} — but ${why.join(', and ')}, so ${num(S)} wins ${winningsPhrase(L)}.`
-      : `${Them}’s best answer is ${num(r1)}, and ${num(S)} still wins ${winningsPhrase(L)}.`);
+      : `${Them}’s best answer is ${num(r1)}, and then ${num(S)} wins ${winningsPhrase(L)}${why.length ? ` (${why.join(', and ')})` : ''}.`);
   } else if (L.gain >= 1 && L.keyIdx === 4) {
     const why = captureReasons(fen, L, 4);
     out.push(`${Them}’s best answer is ${num(r1)}; then after ${lineText(steps.slice(2, 4))}, ${num(steps[4])} wins ${winningsPhrase(L)}${why.length ? ` (${why.join(', and ')})` : ''}.`);

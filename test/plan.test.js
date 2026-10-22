@@ -1,7 +1,7 @@
 // Explanations and hints, checked on a real position reported from play (move 12, White to move).
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { createNodeEngine } from './nodeWorker.js';
-import { planOf, describePlan, planHints } from '../src/lib/plan.js';
+import { planOf, planSync, describePlan, planHints } from '../src/lib/plan.js';
 import { motifsOfMove } from '../src/lib/tactics.js';
 import { describeQuietMove } from '../src/lib/explain.js';
 import { GameController, threatCheckApplies, isRealThreat } from '../src/play/controller.js';
@@ -102,5 +102,32 @@ describe('what your move runs into', () => {
     const c = explainConsequence({ fen, movePv: r.lines[0].pv, winAfter: winOf(r.lines[0].score) });
     expect(c.summary).toBe('3...Nxe5: you’ve given a knight for a pawn');
   }, 60000);
+});
+
+describe('threats and reasons must be caused by the line', () => {
+  // Reported from play: "29.d6 threatens bxa4, winning about two pawns" — bxa4 was available
+  // before d6 — and "after 29...Rd8 the rook no longer guards d8" (the rook moved *to* d8).
+  const BEFORE_D6 = 'r4qkr/5pp1/1p5p/3P1B2/p1PB4/1P3Q2/P4PPP/3RR1K1 w - - 0 29';
+
+  it('does not credit a move with a capture that was already available', async () => {
+    // A fake engine that answers the "what if they passed?" search with bxa4, as the browser did.
+    const fake = { analyze: async () => ({ lines: [{ pv: ['b3a4', 'a8a4', 'f5c8'], score: { type: 'cp', value: 900 } }] }) };
+    const plan = await planOf(fake, BEFORE_D6, ['d5d6', 'a8d8', 'd4b6', 'g7g6', 'b6d8']);
+    expect(plan.threat).toBeNull();
+    const text = describePlan(plan);
+    expect(text).toMatch(/^29\.d6 pushes the passed pawn to d6\./);
+    expect(text).not.toMatch(/threatens/);
+  });
+
+  it('does not call the captured piece a defender that left, nor say "but" when nothing changed', () => {
+    const text = describePlan(planSync(BEFORE_D6, ['d5d6', 'a8d8', 'd4b6', 'g7g6', 'b6d8']));
+    expect(text).not.toMatch(/no longer guards d8/);
+    expect(text).toMatch(/best answer is 29\.\.\.Rd8, and then 30\.Bxb6 wins the pawn on b6 \(nothing defends b6\)/);
+  });
+
+  it('describes quiet piece moves by what they do', () => {
+    const fen = 'r1bq1rk1/pp3ppp/2n2n2/2b1p3/4P3/2NP1N2/PPP2PPP/R1BQ1RK1 w - - 0 9';
+    expect(describeQuietMove(fen, 'f3d2')).toBe('puts the knight on d2, where it protects the pawn on e4');
+  });
 });
 

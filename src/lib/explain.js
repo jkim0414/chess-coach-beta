@@ -346,7 +346,23 @@ export function describeQuietMove(fen, uci) {
   if (r.piece === 'b' && ((side === 'w' && (r.to === 'g2' || r.to === 'b2')) || (side === 'b' && (r.to === 'g7' || r.to === 'b7')))) return 'fianchettoes the bishop onto the long diagonal';
   if (r.piece === 'k' && countPieces(after) <= 12) return 'activates the king — in the endgame it’s a fighting piece';
   if (r.piece === 'q' && moveNo <= 8) return `brings the queen to ${r.to}`;
-  return `improves the ${pn(r.piece)} on ${r.to}`;
+  return pieceRole(before, after, r, side);
+}
+
+/** What a quiet piece move does from its new square: what it aims at, protects, or opens up. */
+function pieceRole(before, after, r, side) {
+  const name = pn(r.piece);
+  const reach = attacksFrom(after, r.to);
+  const targets = reach.map((s) => ({ s, p: after.get(s) })).filter((x) => x.p && x.p.color !== side && x.p.type !== 'k')
+    .sort((a, b) => VALUES[b.p.type] - VALUES[a.p.type]);
+  if (targets.length) return `puts the ${name} on ${r.to}, aiming at the ${pn(targets[0].p.type)} on ${targets[0].s}`;
+  const guards = reach.map((s) => ({ s, p: after.get(s) }))
+    .filter((x) => x.p && x.p.color === side && x.p.type !== 'k' && attackersOf(after, x.s, opp(side)).length)
+    .sort((a, b) => VALUES[b.p.type] - VALUES[a.p.type]);
+  if (guards.length) return `puts the ${name} on ${r.to}, where it protects the ${pn(guards[0].p.type)} on ${guards[0].s}`;
+  const was = attacksFrom(before, r.from).length;
+  if (reach.length >= was + 3) return `moves the ${name} to ${r.to}, where it controls ${reach.length} squares instead of ${was}`;
+  return `regroups the ${name} to ${r.to}`;
 }
 
 /** What a quiet pawn move is for, in order of how much it usually matters. */
