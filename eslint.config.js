@@ -28,7 +28,7 @@ export default defineConfig([
     },
   },
   {
-    files: ['server.js', 'scripts/**/*.{js,mjs}', 'test/**/*.js', 'vite.config.js'],
+    files: ['server.js', 'scripts/**/*.{js,mjs}', 'test/**/*.js', 'audit/**/*.{js,mjs}', 'vite.config.js', 'vitest.audit.config.js', 'pwa-assets.config.js'],
     languageOptions: { globals: { ...globals.node } },
   },
 ])

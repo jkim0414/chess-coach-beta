@@ -405,3 +405,16 @@ td .result, .lede .result { font-size: inherit; }
 .refutation span { color: var(--text-strong); }
 .review-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
 .review-top .callout-actions { margin-top: 0; }
+
+/* ── Update prompt ───────────────────────────────────────────────────────── */
+.toast {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 60;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center;
+  padding: 12px 16px; border-radius: var(--radius); background: var(--surface-2); border: 1px solid var(--border-strong);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45); max-width: calc(100vw - 32px);
+}
+@media (max-width: 720px) { .toast { bottom: calc(84px + env(safe-area-inset-bottom)); } }
+/* Standalone (installed) app: keep clear of the notch / home indicator. */
+@media (display-mode: standalone) {
+  .topbar { padding-top: max(10px, env(safe-area-inset-top)); }
+}

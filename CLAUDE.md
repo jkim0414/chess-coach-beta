@@ -19,6 +19,11 @@ There is exactly one source of truth: `main` on GitHub (`origin/main`). The live
   deployment and it stops updating. After a push, confirm with
   `npx vercel@latest inspect chess-coach-beta.vercel.app` that it serves the new deployment.
 
+- **It's an installable PWA.** A service worker caches the app (and the engine) for offline play. After a
+  deploy, open copies show "A new version of Chess Coach is ready — Update" within ~30 minutes or on next
+  launch; tell James to tap Update rather than "refresh". Icons come from `public/pwa-icon.svg`
+  (`npx pwa-assets-generator` regenerates the PNGs).
+
 ## Project
 
 React 19 + Vite SPA; Stockfish 18 WASM in a Web Worker; all data in localStorage. See README.md for the

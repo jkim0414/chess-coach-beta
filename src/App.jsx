@@ -9,6 +9,7 @@ import ReviewView from './review/ReviewView.jsx';
 import ProgressView from './progress/ProgressView.jsx';
 import GameReviewView from './progress/GameReviewView.jsx';
 import PatternDrawer from './puzzles/PatternDrawer.jsx';
+import UpdatePrompt from './components/UpdatePrompt.jsx';
 import { onPatternRequest } from './puzzles/patternBus.js';
 import './App.css';
 
@@ -64,6 +65,7 @@ export default function App() {
         {view}
       </main>
       {pattern && <PatternDrawer theme={pattern.theme} onClose={() => setPattern(null)} />}
+      <UpdatePrompt />
     </div>
   );
 }
