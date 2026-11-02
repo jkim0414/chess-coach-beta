@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Chessboard } from 'react-chessboard';
+import { Chessboard, defaultPieces } from 'react-chessboard';
 import { Chess } from 'chess.js';
 
 const MARK_STYLES = {
@@ -12,7 +12,6 @@ const MARK_STYLES = {
 };
 
 const PROMO = [['q', 'Queen'], ['r', 'Rook'], ['b', 'Bishop'], ['n', 'Knight']];
-const GLYPH = { w: { q: '♕', r: '♖', b: '♗', n: '♘' }, b: { q: '♛', r: '♜', b: '♝', n: '♞' } };
 
 /**
  * Board with click-or-drag moves, legal-move dots, promotion picker, arrows and
@@ -117,7 +116,7 @@ export default function Board({ fen, orientation = 'white', movable = null, onMo
           <div className="promo-box" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Promote pawn">
             {PROMO.map(([p, name]) => (
               <button key={p} title={name} onClick={() => { const { from, to } = promo; setPromo(null); onMove?.(from, to, p); }}>
-                {GLYPH[game.turn()][p]}
+                {defaultPieces[game.turn() + p.toUpperCase()]()}
               </button>
             ))}
           </div>

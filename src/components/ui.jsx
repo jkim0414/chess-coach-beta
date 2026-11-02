@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { defaultPieces } from 'react-chessboard';
 import { material } from '../lib/material.js';
 import { GRADES, whiteWin, formatScore } from '../lib/evaluation.js';
 
@@ -87,20 +88,30 @@ export function EvalBar({ score, turn, orientation }) {
   );
 }
 
-const SYMBOLS = { w: { p: '♙', n: '♘', b: '♗', r: '♖', q: '♕' }, b: { p: '♟', n: '♞', b: '♝', r: '♜', q: '♛' } };
+const PIECE_NAMES = { p: 'pawn', n: 'knight', b: 'bishop', r: 'rook', q: 'queen' };
 
 export function PlayerStrip({ name, color, fen, sub, thinking }) {
   const { taken, score } = material(fen);
-  const theirs = taken[color === 'w' ? 'b' : 'w']; // what this player has captured
+  const them = color === 'w' ? 'b' : 'w';
+  // What this player has captured, by kind, drawn with the board's own pieces.
+  const groups = ['p', 'n', 'b', 'r', 'q'].map((t) => [t, taken[them].filter((x) => x === t).length]).filter(([, n]) => n);
   const adv = color === 'w' ? score : -score;
+  const label = [
+    groups.length && `Captured ${groups.map(([t, n]) => `${n} ${PIECE_NAMES[t]}${n > 1 ? 's' : ''}`).join(', ')}`,
+    adv > 0 && `up ${adv}`,
+  ].filter(Boolean).join(', ');
   return (
     <div className="player">
       <span className={`player-dot ${color === 'w' ? 'is-white' : 'is-black'}`} aria-hidden />
       <span className="player-name">{name}</span>
       {sub && <span className="player-sub">{sub}</span>}
       {thinking && <span className="thinking" aria-label="thinking"><i /><i /><i /></span>}
-      <span className="player-captured">
-        {theirs.map((t, i) => <span key={i}>{SYMBOLS[color === 'w' ? 'b' : 'w'][t]}</span>)}
+      <span className="player-captured" role="img" aria-label={label || 'Nothing captured'}>
+        {groups.map(([t, n]) => (
+          <span key={t} className="cap-group">
+            {Array.from({ length: n }, (_, i) => <span key={i} className={`cap-piece is-${them}`}>{defaultPieces[them + t.toUpperCase()]()}</span>)}
+          </span>
+        ))}
         {adv > 0 && <b>+{adv}</b>}
       </span>
     </div>

@@ -8,6 +8,7 @@ import { bookMovesAt, openingOf } from '../src/lib/openings.js';
 import { styleBonus, strengthParams, chooseMove, personaById } from '../src/lib/opponent.js';
 import { explainMistake, describeQuietMove } from '../src/lib/explain.js';
 import { formatLine, nullMoveFen, playLine, lineText } from '../src/lib/chessutil.js';
+import { material } from '../src/lib/material.js';
 
 const types = (fen, uci) => motifsOfMove(fen, uci).map((m) => m.type);
 
@@ -203,5 +204,21 @@ describe('opponent style', () => {
     expect(weak.temperature).toBeGreaterThan(strong.temperature);
     expect(weak.blunder).toBeGreaterThan(strong.blunder);
     expect(strong.blunder).toBeLessThan(0.01);
+  });
+});
+
+describe('captured pieces', () => {
+  it('lists captures by kind and the material lead', () => {
+    const { taken, score } = material('1nb1k2r/ppp2ppp/3p4/6q1/8/8/PPP2PPP/R2QK2R w KQk - 0 13');
+    expect(taken.w).toEqual(['p', 'p', 'n', 'n', 'b', 'b']);
+    expect(taken.b).toEqual(['p', 'n', 'b', 'r']);
+    expect(score).toBe(-2);
+  });
+
+  it('counts a promoted pawn as promoted, not captured', () => {
+    // White has two queens and seven pawns: the eighth pawn became the second queen.
+    const { taken, score } = material('4k3/8/8/8/8/8/PPPPPPP1/QQ2K3 w - - 0 50');
+    expect(taken.w).toEqual(['n', 'n', 'b', 'b', 'r', 'r']);
+    expect(score).toBe(7 + 18);
   });
 });

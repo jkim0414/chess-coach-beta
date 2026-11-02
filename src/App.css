@@ -110,8 +110,9 @@
 @keyframes pulse { 50% { opacity: 0.35; } }
 .promo { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0, 0, 0, 0.45); border-radius: 6px; z-index: 5; }
 .promo-box { display: flex; gap: 6px; padding: 10px; border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); }
-.promo-box button { width: 60px; height: 60px; font-size: 40px; line-height: 1; border-radius: 10px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text-strong); }
-.promo-box button:hover { background: var(--surface-3); border-color: var(--accent); }
+.promo-box button { width: 60px; height: 60px; padding: 4px; border-radius: 10px; border: 2px solid transparent; background: var(--sq-light); }
+.promo-box button svg { display: block; width: 100%; height: 100%; }
+.promo-box button:hover { border-color: var(--accent); }
 
 .board-frame { display: flex; gap: 8px; }
 .board-frame > .board { flex: 1; min-width: 0; }
@@ -128,10 +129,18 @@
 .player-dot { width: 12px; height: 12px; border-radius: 3px; border: 1px solid var(--border-strong); }
 .player-dot.is-white { background: #f3f3f0; }
 .player-dot.is-black { background: #23262b; }
-.player-name { font-weight: 650; color: var(--text-strong); }
-.player-sub { color: var(--text-faint); font-size: 12px; }
-.player-captured { margin-left: auto; display: flex; align-items: center; gap: 0; color: var(--text-dim); font-size: 17px; letter-spacing: -3px; }
-.player-captured b { letter-spacing: 0; font-size: 12px; margin-left: 8px; color: var(--text-dim); }
+.player-name { font-weight: 650; color: var(--text-strong); white-space: nowrap; }
+.player-sub { color: var(--text-faint); font-size: 12px; white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.player-captured { margin-left: auto; display: flex; align-items: center; gap: 5px; min-width: 0; }
+.player-captured b { font-size: 12px; margin-left: 3px; color: var(--text-dim); white-space: nowrap; }
+/* Pieces of a kind overlap; when the row is short of room they bunch up tighter. */
+.cap-group { display: flex; min-width: 0; }
+.cap-piece { position: relative; flex: 0 1 auto; width: 9px; min-width: 4px; height: 20px; }
+.cap-piece:last-child { flex-shrink: 0; width: 20px; }
+.cap-piece svg { position: absolute; left: 0; top: 0; width: 20px; height: 20px; }
+/* Black pieces need a light rim to show on the dark background. */
+.cap-piece.is-b svg { filter: drop-shadow(0 0 0.6px rgba(255, 255, 255, 0.75)) drop-shadow(0 0 0.6px rgba(255, 255, 255, 0.75)); }
+@media (prefers-color-scheme: light) { .cap-piece.is-b svg { filter: none; } }
 .thinking { display: inline-flex; gap: 3px; margin-left: 4px; }
 .thinking i { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); animation: blink 1s infinite ease-in-out; }
 .thinking i:nth-child(2) { animation-delay: 0.15s; }
