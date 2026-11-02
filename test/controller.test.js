@@ -45,6 +45,49 @@ describe('GameController', () => {
     expect(done.result.winner).toBe('w');
   }, 60000);
 
+  it('a retry that misses stays on the board, and you decide again', async () => {
+    const c = new GameController({ engine, oppDelay: 0, rng: () => 0.3 });
+    const fen = 'r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4';
+    c.start(config({ fen }));
+    await waitFor(c, (s) => s.analysisReady);
+    move(c, 'b1c3');
+    await waitFor(c, (st) => st.active?.kind === 'intervention');
+    c.retry();
+    // The second try lands like any other move — no snapping back while it's checked…
+    expect(move(c, 'd2d3')).toBe(true);
+    expect(c.getState().plies.map((p) => p.san)).toEqual(['d3']);
+    // …and then the same choices as the first time.
+    const s = await waitFor(c, (st) => st.active?.mode === 'decide');
+    expect(s.active.title).toMatch(/^d3/);
+    expect(s.plies.map((p) => p.san)).toEqual(['d3']);
+    c.retry();
+    expect(c.getState().plies).toEqual([]);
+    expect(c.getState().fen).toBe(fen);
+    move(c, 'h5f7');
+    const done = await waitFor(c, (st) => st.status === 'over');
+    expect(done.result.reason).toBe('checkmate');
+  }, 60000);
+
+  it('a wrong move while finishing a combination stays on the board too', async () => {
+    const c = new GameController({ engine, oppDelay: 0, rng: () => 0.3 });
+    // Back-rank mate in two: 1.Rd8+ Rxd8 2.Qxd8#. Anything else and Black, a piece up, is winning.
+    c.start(config({ fen: '2r3k1/pb3ppp/8/8/8/8/1q1R1PPP/3Q2K1 w - - 0 25' }));
+    await waitFor(c, (s) => s.analysisReady);
+    move(c, 'd2d8');
+    await waitFor(c, (st) => st.active?.kind === 'drill' && st.active.idx === 2 && st.turn === 'user');
+    expect(move(c, 'd1e2')).toBe(true);
+    expect(c.getState().plies.at(-1).san).toBe('Qe2');
+    const s = await waitFor(c, (st) => !!st.active?.wrong);
+    expect(s.active.wrong.title).toMatch(/^Qe2 lets them off the hook/);
+    expect(s.plies.at(-1).san).toBe('Qe2');
+    c.retry();
+    expect(c.getState().plies.at(-1).san).toBe('Rxd8');
+    expect(c.getState().active.wrong).toBe(null);
+    move(c, 'd1d8');
+    const done = await waitFor(c, (st) => st.status === 'over');
+    expect(done.result.reason).toBe('checkmate');
+  }, 60000);
+
   it('explains a hanging-queen blunder without revealing the better move', async () => {
     const c = new GameController({ engine, oppDelay: 0, rng: () => 0.3 });
     c.start(config({ fen: 'rnbqkbnr/pppp1ppp/8/4p3/4P3/5Q2/PPPP1PPP/RNB1KBNR w KQkq - 0 2' }));

@@ -11,7 +11,7 @@
 // driven from tests with a real engine.
 import { Chess } from 'chess.js';
 import { epd, opp, uciToObj, moveToUci, nullMoveFen, gamePhase, COLOR_NAME, NAMES, turnOf, uciToSan, formatLine, materialBalance, playLine } from '../lib/chessutil.js';
-import { winOf, gradeFromLoss, gameAccuracy, GRADES } from '../lib/evaluation.js';
+import { winOf, gradeFromLoss, gameAccuracy, GRADES, LOSS } from '../lib/evaluation.js';
 import { analyzeLine, boardOf, see } from '../lib/tactics.js';
 import { explainMistake, explainThreat, explainConsequence, naiveRecapture, recaptureNote, MOTIFS, materialPhrase, prose } from '../lib/explain.js';
 import { planOf, planSync, describePlan, planHints } from '../lib/plan.js';
@@ -440,6 +440,7 @@ export class GameController {
     if (status !== 'playing' || turn !== 'user' || locked || grading) return false;
     if (active?.kind === 'threat' && active.state === 'asking') return false;
     if (active?.kind === 'intervention' && active.mode === 'decide') return false;
+    if (active?.kind === 'drill' && active.wrong) return false;
     return true;
   }
 
@@ -640,7 +641,7 @@ export class GameController {
     this.patchPly(plyIdx, { intervention: reason, why: reviewWhy || why, cardId });
     this.set({
       turn: 'user',
-      active: { kind: 'intervention', reason, title, why, refutation: reason === 'repertoire' ? '' : ex.refutation, mode: 'decide', attempts: 0, hintLevel: 0, plyIdx, cardId, motif: reason === 'missed' ? t.moment.motif : ex.motif?.type, retryNote: null },
+      active: { kind: 'intervention', reason, title, why, refutation: reason === 'repertoire' ? '' : ex.refutation, mode: 'decide', attempts: 0, hintLevel: 0, plyIdx, cardId, motif: reason === 'missed' ? t.moment.motif : ex.motif?.type, course: repIssue?.course.name },
       arrows: reply && reason !== 'repertoire' ? [{ startSquare: reply.slice(0, 2), endSquare: reply.slice(2, 4), color: 'rgba(239,68,68,0.85)' }] : [],
     });
   }
@@ -681,48 +682,46 @@ export class GameController {
     return id;
   }
 
-  /** Intervention: take the move back and try again. */
-  retry() {
-    const a = this.s.active;
-    if (a?.kind !== 'intervention' || a.mode !== 'decide') return;
-    const plies = this.s.plies.slice(0, a.plyIdx);
-    this.chess.undo();
+  /** Take back the moves from `plyIdx` on (your move under discussion). */
+  unplay(plyIdx) {
+    for (let i = plyIdx; i < this.s.plies.length; i++) this.chess.undo();
+    const plies = this.s.plies.slice(0, plyIdx);
     const last = plies[plies.length - 1];
-    this.set({ plies, fen: this.chess.fen(), lastMove: last ? { from: last.uci.slice(0, 2), to: last.uci.slice(2, 4) } : null, arrows: [], marks: {}, active: { ...a, mode: 'retry', attempts: a.attempts + 1, retryNote: null } });
+    this.set({ plies, fen: this.chess.fen(), lastMove: last ? { from: last.uci.slice(0, 2), to: last.uci.slice(2, 4) } : null, arrows: [], marks: {} });
   }
 
+  /** "Try again": take the move back and find a better one. */
+  retry() {
+    const a = this.s.active;
+    if (a?.kind === 'drill' && a.wrong) {
+      this.unplay(a.wrong.plyIdx);
+      this.set({ active: { ...a, wrong: null } });
+      return;
+    }
+    if (a?.kind !== 'intervention' || a.mode !== 'decide') return;
+    this.unplay(a.plyIdx);
+    this.set({ active: { ...a, mode: 'retry', attempts: a.attempts + 1 } });
+  }
+
+  /** Your second try goes on the board like any other move, and then it's checked. */
   async retryMove(uci) {
     const a = this.s.active;
     const t = this.t;
-    const accept = a.reason === 'repertoire'
-      ? async () => (uci === t.rep.move.uci ? { loss: 0 } : null)
-      : async () => {
-        const ev = await this.evalMove(t, uci);
-        if (!ev) return undefined;
-        const tol = a.reason === 'missed' ? 0.04 : 0.07;
-        return ev.loss <= tol ? ev : { fail: ev };
-      };
-    this.set({ grading: true });
-    const res = await accept();
-    if (t.gen !== this.gen || res === undefined) return;
-    this.set({ grading: false });
-    const san = uciToSan(t.fen, uci);
-    if (!res || res.fail) {
-      let note = `${san} isn’t it either.`;
-      if (res?.fail && a.reason !== 'repertoire') {
-        const ex = explainMistake({ fen: t.fen, uci, movePv: res.fail.line.pv, winBefore: res.fail.winBest, winAfter: res.fail.winMove, bestPv: res.fail.lines?.[0]?.pv, bestScore: res.fail.lines?.[0]?.score });
-        note = res.fail.loss < 0.1 ? `${san} is playable, but there’s something stronger.` : `${san} doesn’t work. ${ex.why}`;
-      }
-      this.set({ active: { ...a, attempts: a.attempts + 1, retryNote: note } });
-      return;
-    }
-    const rating = a.hintLevel >= 2 || a.attempts > 2 ? Rating.Again : Rating.Hard;
-    if (a.cardId) store.reviewCard(a.cardId, rating, Date.now() + 1);
     this.t.moved = true;
     const plyIdx = this.applyMove(uci, 'user', { retried: true, thinkMs: 0 });
-    const ev = res.loss === 0 && a.reason === 'repertoire' ? await this.evalMove(t, uci) : res;
+    this.set({ grading: true, arrows: [], marks: {} });
+    const ev = await this.evalMove(t, uci);
     if (t.gen !== this.gen) return;
-    if (ev?.line) this.patchPly(plyIdx, { grade: a.reason === 'repertoire' ? 'book' : ev.grade, loss: ev.loss, winAfter: ev.winMove, winBefore: ev.winBest, scoreAfter: ev.line.score, best: { uci: ev.lines[0].pv[0], san: uciToSan(t.fen, ev.lines[0].pv[0]) } });
+    this.set({ grading: false });
+    if (!ev) { this.set({ active: null }); this.oppTurn(); return; } // no verdict: just play on
+    const isRep = a.reason === 'repertoire';
+    this.patchPly(plyIdx, { grade: isRep && uci === t.rep.move.uci ? 'book' : ev.grade, loss: ev.loss, winAfter: ev.winMove, winBefore: ev.winBest, scoreAfter: ev.line.score, best: { uci: ev.lines[0].pv[0], san: uciToSan(t.fen, ev.lines[0].pv[0]) } });
+    this.set({ evalScore: { score: ev.line.score, turn: this.s.userColor } });
+    const right = isRep ? uci === t.rep.move.uci : ev.loss <= (a.reason === 'missed' ? 0.04 : 0.07);
+    if (!right) { this.reconsider(t, plyIdx, ev); return; }
+    const san = this.s.plies[plyIdx].san;
+    const rating = a.hintLevel >= 2 || a.attempts > 2 ? Rating.Again : Rating.Hard;
+    if (a.cardId) store.reviewCard(a.cardId, rating, Date.now() + 1);
     const explain = a.reason === 'repertoire' ? (t.rep.move.note || '') : ev?.line ? describePlan(planSync(t.fen, ev.line.pv)) : '';
     // When several moves were fine, say so: the lesson is the problem they all solve, not one magic move.
     const lines = t.result?.lines || [];
@@ -744,12 +743,43 @@ export class GameController {
     this.oppTurn();
   }
 
-  /** Intervention: reveal the answer and play it. */
+  /** A second try that still isn't right stays on the board, and you decide again — as with the first. */
+  reconsider(t, plyIdx, ev) {
+    const a = this.s.active;
+    const { san, uci } = this.s.plies[plyIdx];
+    const bad = ev.loss >= LOSS.inaccuracy;
+    let why = `${san} is playable, but there’s something stronger.`;
+    let refutation = '';
+    if (bad) {
+      const ex = explainMistake({ fen: t.fen, uci, movePv: ev.line.pv, winBefore: ev.winBest, winAfter: ev.winMove, bestPv: ev.lines[0]?.pv, bestScore: ev.lines[0]?.score });
+      const cons = explainConsequence({ fen: t.fen, movePv: ev.line.pv, winAfter: ev.winMove });
+      why = ex.why;
+      refutation = cons && ex.kind !== 'positional' ? cons.summary : ex.refutation;
+    }
+    if (a.reason === 'repertoire') why = `Your ${a.course} repertoire plays something else here.${bad ? ` ${why}` : ''}`;
+    const g = GRADES[ev.grade];
+    const title = a.reason !== 'repertoire' && ['inaccuracy', 'mistake', 'blunder'].includes(ev.grade) ? `${san}${g.symbol} ${g.label}` : `${san} isn’t it either`;
+    this.patchPly(plyIdx, { intervention: a.reason, why, cardId: a.cardId });
+    const reply = bad ? ev.line.pv[1] : null;
+    this.set({
+      active: { ...a, mode: 'decide', title, why, refutation, plyIdx },
+      arrows: reply ? [{ startSquare: reply.slice(0, 2), endSquare: reply.slice(2, 4), color: 'rgba(239,68,68,0.85)' }] : [],
+    });
+  }
+
+  /** "Show me": take your move back, then play the answer. */
   async showMe() {
     const a = this.s.active;
+    if (this.s.grading) return;
+    if (a?.kind === 'drill' && a.wrong) {
+      this.unplay(a.wrong.plyIdx);
+      this.set({ active: { ...a, wrong: null } });
+      this.drillMove(a.L.steps[a.idx].uci, { shown: true });
+      return;
+    }
     if (a?.kind !== 'intervention') return;
     const t = this.t;
-    if (a.mode === 'decide') { this.chess.undo(); this.set({ plies: this.s.plies.slice(0, a.plyIdx) }); }
+    if (a.mode === 'decide') this.unplay(a.plyIdx);
     if (a.cardId && a.reason !== 'repertoire') store.reviewCard(a.cardId, Rating.Again, Date.now() + 1);
     const res = t.result || (await t.analysis);
     if (t.gen !== this.gen || !res) return;
@@ -774,9 +804,15 @@ export class GameController {
     this.oppTurn();
   }
 
-  /** Intervention: keep the move and continue. */
+  /** "Keep my move": leave it on the board and play on. */
   playOn() {
     const a = this.s.active;
+    if (a?.kind === 'drill' && a.wrong) {
+      this.set({ active: null, arrows: [] });
+      this.feed({ tone: 'info', title: 'Playing on', text: 'The combination is in your review deck, so it will come back.' });
+      this.oppTurn();
+      return;
+    }
     if (a?.kind !== 'intervention' || a.mode !== 'decide') return;
     this.set({ active: null, arrows: [] });
     this.feed({ tone: 'info', title: 'Playing on', text: a.reason === 'repertoire' ? 'Noted — this position is back in your review queue.' : 'Saved to your review deck. Let’s see how it goes.' });
@@ -809,8 +845,9 @@ export class GameController {
   async hint() {
     const a = this.s.active;
     const t = this.t;
-    if (!t || this.s.hintPending) return;
+    if (!t || this.s.hintPending || this.s.grading) return;
     if (a?.kind === 'drill') {
+      if (a.wrong) return;
       const step = a.L.steps[a.idx];
       this.set({ active: { ...a, hintLevel: (a.hintLevel || 0) + 1 }, arrows: [{ startSquare: step.from, endSquare: step.to, color: 'rgba(34,197,94,0.85)' }] });
       return;
@@ -860,16 +897,18 @@ export class GameController {
     this.set({ active: next, turn: 'user', thinking: false, arrows: [] });
   }
 
-  async drillMove(uci) {
+  async drillMove(uci, { shown = false } = {}) {
     const a = this.s.active;
     const step = a.L.steps[a.idx];
     const gen = this.gen;
+    const fen = this.chess.fen();
+    // Like any move in the game, it goes on the board first; then it's checked.
+    const plyIdx = this.applyMove(uci, 'user', { drill: true, ...(shown ? { revealed: true } : {}) });
     let ok = uci === step.uci;
-    let newPv = null;
+    let newPv = null, miss = null;
     if (!ok) {
       // Accept an equally good alternative.
       this.set({ grading: true });
-      const fen = this.chess.fen();
       const bestRes = await this.engine.analyze(fen, { depth: 12, movetime: 1500 });
       const mine = bestRes ? await this.engine.analyze(fen, { depth: 12, searchmoves: [uci], movetime: 1500 }) : null;
       if (gen !== this.gen) return;
@@ -877,15 +916,11 @@ export class GameController {
       if (bestRes?.lines[0] && mine?.lines[0]) {
         const wb = winOf(bestRes.lines[0].score), wm = winOf(mine.lines[0].score);
         if (wb - wm <= 0.03 && wm >= 0.8) { ok = true; newPv = mine.lines[0].pv; }
+        else miss = { wb, wm, pv: mine.lines[0].pv };
       }
     }
-    if (!ok) {
-      const tries = a.attempts + 1;
-      this.set({ active: { ...a, attempts: tries, text: tries >= 2 ? 'Not that. Use a hint if you’re stuck.' : `${uciToSan(this.chess.fen(), uci)} lets them off. Keep the pressure on.` } });
-      return;
-    }
-    const fen = this.chess.fen();
-    this.applyMove(uci, 'user', { drill: true, grade: 'best', loss: 0 });
+    if (!ok) { this.drillMiss(fen, plyIdx, miss); return; }
+    this.patchPly(plyIdx, { grade: 'best', loss: 0 });
     if (this.checkEnd()) return;
     let L = a.L, idx = a.idx + 1, end = a.end;
     if (newPv) {
@@ -900,8 +935,30 @@ export class GameController {
       this.oppTurn();
       return;
     }
-    this.set({ active: { ...a, L, idx, end, attempts: 0, hintLevel: 0, text: 'Good. Keep going.' } });
+    this.set({ active: { ...a, L, idx, end, attempts: 0, hintLevel: 0, text: shown ? 'That was the move. Keep going.' : 'Good. Keep going.' } });
     this.drillOpponent();
+  }
+
+  /** A move that doesn't finish the combination: it stays on the board, and you decide what next. */
+  drillMiss(fen, plyIdx, miss) {
+    const a = this.s.active;
+    const { san } = this.s.plies[plyIdx];
+    let title = `${san} isn’t it`, refutation = '', reply = null;
+    const why = 'There’s a stronger way to finish the combination.';
+    if (miss) {
+      const loss = Math.max(0, miss.wb - miss.wm);
+      this.patchPly(plyIdx, { grade: gradeFromLoss(loss), loss, winBefore: miss.wb, winAfter: miss.wm });
+      if (miss.wm >= 0.8) title = `${san} keeps you ahead, but it isn’t the cleanest finish`;
+      else {
+        title = miss.wm >= 0.6 ? `${san} lets some of your advantage slip` : `${san} lets them off the hook`;
+        refutation = explainConsequence({ fen, movePv: miss.pv, winAfter: miss.wm })?.summary || '';
+        reply = miss.pv[1];
+      }
+    }
+    this.set({
+      active: { ...a, attempts: a.attempts + 1, wrong: { plyIdx, title, why, refutation } },
+      arrows: reply ? [{ startSquare: reply.slice(0, 2), endSquare: reply.slice(2, 4), color: 'rgba(239,68,68,0.85)' }] : [],
+    });
   }
 
   // ── opponent ────────────────────────────────────────────────────────────

@@ -21,7 +21,7 @@ const SURELY_SAN = /^(?:…|[KQRBN]|[a-h]x|O-O)|[+#=]/;
 
 function textOf(r) {
   if (r.shown) return r.shown.filter(Boolean).join(' ‖ ');
-  return [r.title, r.text, r.reveal, r.why, r.refutation, r.consequence, r.hintText, r.retryNote, ...(r.hints || []).map((h) => h.text)].filter(Boolean).join(' ‖ ');
+  return [r.title, r.text, r.reveal, r.why, r.refutation, r.consequence, r.hintText, ...(r.hints || []).map((h) => h.text)].filter(Boolean).join(' ‖ ');
 }
 
 /** Every position the message could be talking about. */
@@ -55,8 +55,8 @@ function contextPositions(r) {
       }
     }
   }
-  // A retry note ("Bxa4 doesn't work. Your bishop on a4…") talks about the move just tried.
-  const tried = r.shown?.join(' ').match(/(\S+) (?:doesn’t work|isn’t it either|is playable)/)?.[1];
+  // A second try ("Bxa4 isn’t it either", "Bxa4 is playable, but…") talks about the move just tried.
+  const tried = r.shown?.join(' ').match(/(\S+) (?:isn’t it|is playable|keeps you ahead|lets)/)?.[1];
   if (tried && r.ctx?.turn?.fen) {
     const g = new Chess(r.ctx.turn.fen);
     try { if (g.move(tried, { strict: false })) fens.add(g.fen()); } catch { /* not a move */ }

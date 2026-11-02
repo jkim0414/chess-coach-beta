@@ -68,7 +68,7 @@ it(`audit shard ${SHARD}`, async () => {
         rec({ type: 'feed', gameId, ply: s.plies.length, tone: f.tone, title: f.title, text: f.text, reveal: f.reveal || null, ctx: ctxOf(s, c.t) });
       }
       const a = s.active;
-      const key = a ? JSON.stringify([a.kind, a.state, a.mode, a.title, a.why, a.refutation, a.hintText, a.retryNote, a.text, a.threat?.text]) : '';
+      const key = a ? JSON.stringify([a.kind, a.state, a.mode, a.title, a.why, a.refutation, a.hintText, a.text, a.wrong?.title, a.threat?.text]) : '';
       if (key && key !== lastCallout) {
         lastCallout = key;
         rec({ type: 'callout', gameId, ply: s.plies.length, kind: a.kind, state: a.state || a.mode || null, reason: a.reason || null, shown: shownText(a), ctx: ctxOf(s, c.t) });
@@ -91,7 +91,7 @@ it(`audit shard ${SHARD}`, async () => {
         c.answerThreat(right ? a.threat.squares[0] : rng() < 0.5 ? null : 'a1');
         continue;
       }
-      if (a?.kind === 'intervention' && a.mode === 'decide') {
+      if ((a?.kind === 'intervention' && a.mode === 'decide') || (a?.kind === 'drill' && a.wrong)) {
         const r = rng();
         if (r < 0.5) c.retry(); else if (r < 0.75) await c.showMe(); else c.playOn();
         await sleep(10);
@@ -154,8 +154,8 @@ function summary(s) {
 function shownText(a) {
   if (a.kind === 'threat') return a.state === 'asking' ? [] : [a.threat?.text, a.threat?.recapture, a.threat?.counter];
   if (a.kind === 'moment') return [a.type !== 'hint' && a.title, a.text, a.hintText];
-  if (a.kind === 'intervention') return a.mode === 'decide' ? [a.title, a.why, a.refutation, a.retryNote, a.hintText] : [a.title, a.retryNote, a.hintText];
-  if (a.kind === 'drill') return [a.text];
+  if (a.kind === 'intervention') return a.mode === 'decide' ? [a.title, a.why, a.refutation, a.hintText] : [a.title, a.hintText];
+  if (a.kind === 'drill') return a.wrong ? [a.wrong.title, a.wrong.why, a.wrong.refutation] : [a.text];
   return [];
 }
 

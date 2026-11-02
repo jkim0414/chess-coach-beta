@@ -4,6 +4,17 @@ import { requestPattern } from '../puzzles/patternBus.js';
 
 const ICONS = { best: '★', good: '✓', book: '📖', inaccuracy: '?!', mistake: '?', blunder: '??', info: '•', threat: '⚠', tactic: '⚡', opening: '♜' };
 
+/** The choices after a move the coach stops you on — the same everywhere in a game. */
+function Decide({ c }) {
+  return (
+    <div className="callout-actions">
+      <button type="button" className="btn btn-primary btn-sm" onClick={() => c.retry()}>Try again</button>
+      <button type="button" className="btn btn-ghost btn-sm" onClick={() => c.showMe()}>Show me</button>
+      <button type="button" className="btn btn-ghost btn-sm" onClick={() => c.playOn()}>Keep my move</button>
+    </div>
+  );
+}
+
 function Callout({ s, c }) {
   const a = s.active;
   const opp = COLOR_NAME[s.userColor === 'w' ? 'b' : 'w'];
@@ -67,15 +78,25 @@ function Callout({ s, c }) {
         <h3>{a.title}</h3>
         {decide && <p>{a.why}</p>}
         {decide && a.refutation && <p className="refutation">What happens next: <span>{a.refutation}</span></p>}
-        {!decide && <p>{a.reason === 'repertoire' ? 'Play your repertoire move.' : a.reason === 'missed' ? 'Find the strongest move.' : 'Find a better move.'}</p>}
-        {a.retryNote && <p className="retry-note">{a.retryNote}</p>}
+        {!decide && <p>{s.grading ? 'Checking your move…' : a.reason === 'repertoire' ? 'Play your repertoire move.' : a.reason === 'missed' ? 'Find the strongest move.' : 'Find a better move.'}</p>}
         {a.hintText && <p className="hint-text">💡 {a.hintText}</p>}
-        <div className="callout-actions">
-          {decide && <button type="button" className="btn btn-primary btn-sm" onClick={() => c.retry()}>Try again</button>}
-          {!decide && (a.hintLevel || 0) < 3 && <button type="button" className="btn btn-ghost btn-sm" onClick={() => c.hint()} disabled={s.hintPending}>{s.hintPending ? 'Thinking…' : a.hintLevel === 2 ? 'Show the move' : a.hintLevel ? 'More help' : 'Hint'}</button>}
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => c.showMe()}>Show me</button>
-          {decide && <button type="button" className="btn btn-ghost btn-sm" onClick={() => c.playOn()}>Keep my move</button>}
-        </div>
+        {decide ? <Decide c={c} /> : !s.grading && (
+          <div className="callout-actions">
+            {(a.hintLevel || 0) < 3 && <button type="button" className="btn btn-ghost btn-sm" onClick={() => c.hint()} disabled={s.hintPending}>{s.hintPending ? 'Thinking…' : a.hintLevel === 2 ? 'Show the move' : a.hintLevel ? 'More help' : 'Hint'}</button>}
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => c.showMe()}>Show me</button>
+          </div>
+        )}
+      </div>
+    );
+  }
+  if (a.kind === 'drill' && a.wrong) {
+    return (
+      <div className="callout callout-tactic" role="alert">
+        <div className="callout-kicker">Hold on</div>
+        <h3>{a.wrong.title}</h3>
+        <p>{a.wrong.why}</p>
+        {a.wrong.refutation && <p className="refutation">What happens next: <span>{a.wrong.refutation}</span></p>}
+        <Decide c={c} />
       </div>
     );
   }
@@ -83,10 +104,12 @@ function Callout({ s, c }) {
     return (
       <div className="callout callout-tactic">
         <div className="callout-kicker">Finish the combination</div>
-        <p>{a.text}</p>
-        <div className="callout-actions">
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => c.hint()} disabled={s.turn !== 'user'}>Show the move</button>
-        </div>
+        <p>{s.grading ? 'Checking your move…' : a.text}</p>
+        {!s.grading && (
+          <div className="callout-actions">
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => c.hint()} disabled={s.turn !== 'user'}>Show the move</button>
+          </div>
+        )}
       </div>
     );
   }
