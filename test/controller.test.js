@@ -45,6 +45,25 @@ describe('GameController', () => {
     expect(done.result.winner).toBe('w');
   }, 60000);
 
+  it('judges the game on your first try, not on the move you were shown', async () => {
+    const c = new GameController({ engine, oppDelay: 0, rng: () => 0.3 });
+    c.start(config({ fen: 'r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4' }));
+    await waitFor(c, (s) => s.analysisReady);
+    move(c, 'b1c3');
+    await waitFor(c, (st) => st.active?.kind === 'intervention');
+    c.showMe();
+    const done = await waitFor(c, (st) => st.status === 'over');
+    expect(done.result.reason).toBe('checkmate');
+    // Qxf7# was the coach's move: the game still records Nc3, and scores it.
+    expect(done.plies[0]).toMatchObject({ san: 'Qxf7#', revealed: true, first: { san: 'Nc3', kind: 'missed' } });
+    expect(done.summary.counts.best).toBeUndefined();
+    expect(done.summary.accuracy).toBeLessThan(30);
+    expect(done.summary.cards).toBe(1);
+    const saved = store.getState().games[0];
+    expect(saved.plies[0]).toMatchObject({ san: 'Qxf7#', revealed: true, first: { san: 'Nc3' } });
+    expect(saved.pgn).toMatch(/\[White "You"\]/);
+  }, 60000);
+
   it('a retry that misses stays on the board, and you decide again', async () => {
     const c = new GameController({ engine, oppDelay: 0, rng: () => 0.3 });
     const fen = 'r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4';

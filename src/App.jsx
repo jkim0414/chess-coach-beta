@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useRoute, href } from './lib/router.js';
-import { useStore, dueCards } from './lib/store.js';
+import { useStore, dueCards, useSaveFailed } from './lib/store.js';
 import PlayView from './play/PlayView.jsx';
 import OpeningsView from './openings/OpeningsView.jsx';
 import CourseView from './openings/CourseView.jsx';
@@ -30,6 +30,7 @@ export default function App() {
   const tab = route[0] || 'play';
   useTick(60000);
   const due = useStore((s) => dueCards(s.cards).length);
+  const saveFailed = useSaveFailed();
   const [pattern, setPattern] = useState(null);
   useEffect(() => onPatternRequest(setPattern), []);
 
@@ -65,6 +66,11 @@ export default function App() {
         {view}
       </main>
       {pattern && <PatternDrawer theme={pattern.theme} onClose={() => setPattern(null)} />}
+      {saveFailed && (
+        <div className="toast toast-warn" role="alert">
+          <span>Your progress isn’t being saved: this browser’s storage is full or blocked. Export a backup from the Progress tab.</span>
+        </div>
+      )}
       <UpdatePrompt />
     </div>
   );

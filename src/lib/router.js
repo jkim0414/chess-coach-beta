@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
-const parse = () => window.location.hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
+const decode = (x) => { try { return decodeURIComponent(x); } catch { return x; } };
+const parse = () => window.location.hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decode);
 
 export function useRoute() {
   const [route, setRoute] = useState(parse);

@@ -2,14 +2,28 @@ import { useEffect, useMemo, useState } from 'react';
 import { Chess } from 'chess.js';
 import Board from '../components/Board.jsx';
 import { MoveList, Empty } from '../components/ui.jsx';
-import { useStore } from '../lib/store.js';
-import { href } from '../lib/router.js';
+import { useStore, getState } from '../lib/store.js';
+import { href, go } from '../lib/router.js';
 import { GRADES, whiteWin } from '../lib/evaluation.js';
 import { planOf, describePlan } from '../lib/plan.js';
 import { getEngine } from '../lib/engine.js';
-import { go } from '../lib/router.js';
+import { moveToUci } from '../lib/chessutil.js';
 import { getController } from '../play/session.js';
-import { getState } from '../lib/store.js';
+
+const SLIPS = ['mistake', 'blunder'];
+/** The grade of what you played first here (a retried or shown move still counts as its first try). */
+const firstGrade = (p) => (p.first || p).grade;
+
+/** Older games keep only their PGN: rebuild a bare move list from it (no grades or notes). */
+function pliesFromPgn(game) {
+  try {
+    const g = new Chess();
+    g.loadPgn(game.pgn);
+    return g.history({ verbose: true }).map((m) => ({ san: m.san, uci: moveToUci(m), by: m.color === game.userColor ? 'user' : 'opp', fenBefore: m.before }));
+  } catch {
+    return [];
+  }
+}
 
 /** Win-chance graph (from the learner's side) with one point per move they played. */
 function EvalGraph({ plies, userColor, current, onSelect }) {
@@ -28,9 +42,9 @@ function EvalGraph({ plies, userColor, current, onSelect }) {
       <line x1={0} x2={W} y1={H / 2} y2={H / 2} className="chart-grid" />
       <path d={`${d} L${x(pts[pts.length - 1].i)},${H} L${x(pts[0].i)},${H} Z`} className="chart-area" />
       <path d={d} className="chart-line" />
-      {pts.filter(({ p }) => ['mistake', 'blunder'].includes(p.grade)).map(({ i, p }) => (
-        <circle key={i} cx={x(i)} cy={y(p)} r={5} className={`chart-dot dot-${p.grade}`} onClick={() => onSelect(i)}>
-          <title>{`${p.san}: ${GRADES[p.grade].label}`}</title>
+      {pts.filter(({ p }) => SLIPS.includes(firstGrade(p))).map(({ i, p }) => (
+        <circle key={i} cx={x(i)} cy={y(p)} r={5} className={`chart-dot dot-${firstGrade(p)}`} onClick={() => onSelect(i)}>
+          <title>{`${(p.first || p).san}: ${GRADES[firstGrade(p)].label}`}</title>
         </circle>
       ))}
       {current >= 0 && <line x1={x(current)} x2={x(current)} y1={0} y2={H} className="chart-cursor" />}
@@ -43,7 +57,8 @@ export default function GameReviewView({ gameId }) {
   const [idx, setIdx] = useState(-1);
   const [deep, setDeep] = useState(null);
 
-  const plies = useMemo(() => game?.plies || [], [game]);
+  const plies = useMemo(() => (game?.plies?.length ? game.plies : game?.pgn ? pliesFromPgn(game) : []), [game]);
+  const bare = !!game && !game.plies?.length && plies.length > 0;
   useEffect(() => {
     const onKey = (e) => {
       if (e.target.closest?.('input,select,textarea')) return;
@@ -65,7 +80,7 @@ export default function GameReviewView({ gameId }) {
   if (cur?.by === 'user' && cur.bestUci && cur.bestUci !== cur.uci && ['inaccuracy', 'mistake', 'blunder'].includes(cur.grade)) {
     arrows.push({ startSquare: cur.bestUci.slice(0, 2), endSquare: cur.bestUci.slice(2, 4), color: 'rgba(34,197,94,0.8)' });
   }
-  const keyMoments = plies.map((p, i) => ({ p, i })).filter(({ p }) => p.by === 'user' && ['mistake', 'blunder'].includes(p.grade));
+  const keyMoments = plies.map((p, i) => ({ p, i })).filter(({ p }) => p.by === 'user' && SLIPS.includes(firstGrade(p)));
 
   const shown = deep?.idx === idx ? deep : null;
   async function analyse() {
@@ -107,12 +122,19 @@ export default function GameReviewView({ gameId }) {
             <EvalGraph plies={plies} userColor={game.userColor} current={idx} onSelect={setIdx} />
             {cur ? (
               <div className="ply-info">
-                <div className="lesson-kicker">{cur.by === 'user' ? 'You played' : `${game.persona} played`}</div>
+                {cur.first && (
+                  <p className="first-try">
+                    You first played <b>{cur.first.san}</b>{GRADES[cur.first.grade] && <> <span className={`chip chip-${GRADES[cur.first.grade].tone}`}>{GRADES[cur.first.grade].label}</span></>}
+                    {cur.first.why ? <> — {cur.first.why}</> : '.'}
+                  </p>
+                )}
+                <div className="lesson-kicker">{cur.by !== 'user' ? `${game.persona} played` : cur.revealed ? 'Then the coach showed you' : cur.first ? 'Then you played' : 'You played'}</div>
                 <div className="lesson-san">{cur.san} {cur.grade && GRADES[cur.grade] && <span className={`chip chip-${GRADES[cur.grade].tone}`}>{GRADES[cur.grade].label}</span>}</div>
                 {cur.by === 'user' && cur.best && cur.best !== cur.san && ['inaccuracy', 'mistake', 'blunder'].includes(cur.grade) && <p>Best was <b>{cur.best}</b> (green arrow).</p>}
-                {cur.why && <p>{cur.why}</p>}
+                {cur.why && cur.why !== cur.first?.why && <p>{cur.why}</p>}
               </div>
             ) : <p className="muted">Start position. Use ◀ ▶ or your arrow keys.</p>}
+            {bare && idx < 0 && <p className="muted">This is an older game: the moves are kept, but not the move-by-move grades.</p>}
             {viewPly === undefined && cur && <p className="muted">Final position.</p>}
             <div className="callout-actions">
               <button type="button" className="btn btn-ghost btn-xs" onClick={analyse} disabled={shown?.loading}>{shown?.loading ? 'Analysing…' : 'What was best here?'}</button>
@@ -124,7 +146,7 @@ export default function GameReviewView({ gameId }) {
               <h3 className="sub-title">Key moments</h3>
               <ul className="plain moments">
                 {keyMoments.map(({ p, i }) => (
-                  <li key={i}><button type="button" className="link" onClick={() => setIdx(i)}>{Math.floor(i / 2) + 1}. {p.san}</button> <span className={`chip chip-${GRADES[p.grade].tone}`}>{GRADES[p.grade].label}</span></li>
+                  <li key={i}><button type="button" className="link" onClick={() => setIdx(i)}>{Math.floor(i / 2) + 1}. {(p.first || p).san}</button> <span className={`chip chip-${GRADES[firstGrade(p)].tone}`}>{GRADES[firstGrade(p)].label}</span></li>
                 ))}
               </ul>
               <p className="muted">These positions are already in your review deck.</p>

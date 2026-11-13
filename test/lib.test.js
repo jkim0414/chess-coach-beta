@@ -9,6 +9,7 @@ import { styleBonus, strengthParams, chooseMove, personaById } from '../src/lib/
 import { explainMistake, describeQuietMove } from '../src/lib/explain.js';
 import { formatLine, nullMoveFen, playLine, lineText } from '../src/lib/chessutil.js';
 import { material } from '../src/lib/material.js';
+import * as store from '../src/lib/store.js';
 
 const types = (fen, uci) => motifsOfMove(fen, uci).map((m) => m.type);
 
@@ -220,5 +221,37 @@ describe('captured pieces', () => {
     const { taken, score } = material('4k3/8/8/8/8/8/PPPPPPP1/QQ2K3 w - - 0 50');
     expect(taken.w).toEqual(['n', 'n', 'b', 'b', 'r', 'r']);
     expect(score).toBe(7 + 18);
+  });
+});
+
+describe('saved data', () => {
+  it('counts review days in the user’s own timezone', () => {
+    const lateEvening = new Date(2026, 10, 2, 23, 30).getTime();
+    expect(store.dayKey(lateEvening)).toBe('2026-11-02');
+    store.__setState(store.freshState());
+    store.upsertCard({ id: 'c1', type: 'mistake', fen: new Chess().fen(), answers: ['e2e4'] });
+    store.reviewCard('c1', Rating.Good, lateEvening);
+    expect(store.getState().stats.days).toEqual({ '2026-11-02': 1 });
+  });
+
+  it('keeps move-by-move records only for recent games, and the PGN for all', () => {
+    store.__setState(store.freshState());
+    for (let i = 0; i < 45; i++) store.saveGame({ id: `g${i}`, pgn: '1. e4 e5', plies: [{ san: 'e4' }, { san: 'e5' }] });
+    const { games } = store.getState();
+    expect(games).toHaveLength(45);
+    expect(games[0].id).toBe('g44');
+    expect(games.filter((g) => g.plies.length)).toHaveLength(40);
+    expect(games[44]).toMatchObject({ id: 'g0', pgn: '1. e4 e5', plies: [] });
+  });
+
+  it('fills in whatever an imported backup is missing, and rejects other files', () => {
+    store.__setState(store.freshState());
+    store.importData(JSON.stringify({ cards: {}, settings: { strength: 1500 }, stats: { threat: { asked: 3 } } }));
+    const s = store.getState();
+    expect(s.settings).toMatchObject({ strength: 1500, coachMode: 'coach', custom: { style: 'balanced' } });
+    expect(s.games).toEqual([]);
+    expect(s.stats).toMatchObject({ threat: { asked: 3, correct: 0, streak: 0 }, puzzles: {}, days: {}, motifs: {} });
+    expect(() => store.importData('not json')).toThrow(/not a Chess Coach backup/);
+    expect(() => store.importData('{"foo":1}')).toThrow(/not a Chess Coach backup/);
   });
 });

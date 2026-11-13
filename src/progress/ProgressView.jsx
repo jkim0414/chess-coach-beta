@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
-import { useStore, exportData, importData, resetAll, dueCards } from '../lib/store.js';
+import { useStore, importData, resetAll, dueCards, dayKey } from '../lib/store.js';
+import { downloadBackup } from '../lib/backup.js';
 import { COURSES, courseProgress } from '../lib/courses.js';
 import { MOTIFS } from '../lib/explain.js';
 import { themeName } from '../puzzles/lichess.js';
@@ -54,11 +55,14 @@ export default function ProgressView() {
   const avgAcc = recent.length ? Math.round(recent.reduce((a, g) => a + g.accuracy, 0) / recent.length) : null;
   const threatPct = stats.threat.asked ? Math.round((100 * stats.threat.correct) / stats.threat.asked) : null;
   const days = Object.keys(stats.days).sort();
+  // Consecutive days with a review, counting back from today (or from yesterday, if today's
+  // reviews are still to come). Days are the user's own calendar days.
   let streak = 0;
+  const today = dayKey();
   for (let d = new Date(); ; d.setDate(d.getDate() - 1)) {
-    const key = d.toISOString().slice(0, 10);
+    const key = dayKey(d.getTime());
     if (stats.days[key]) streak++;
-    else if (streak || key !== new Date().toISOString().slice(0, 10)) break;
+    else if (streak || key !== today) break;
   }
   const allCards = Object.values(cards);
   const mastered = allCards.filter((c) => mastery(c.sched).level >= 3).length;
@@ -68,14 +72,6 @@ export default function ProgressView() {
   const phaseMax = Math.max(1, ...Object.values(phases));
   const activeCourses = COURSES.filter((c) => courses[c.id]?.active);
 
-  function doExport() {
-    const blob = new Blob([exportData()], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `chess-coach-backup-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-  }
   async function doImport(file) {
     try { importData(await file.text()); setMsg('Backup restored.'); } catch (e) { setMsg(e.message); }
   }
@@ -184,7 +180,7 @@ export default function ProgressView() {
         <h2 className="section-title">Your data</h2>
         <p className="muted">Everything is stored in this browser. Export a backup to move it to another device.</p>
         <div className="callout-actions">
-          <button type="button" className="btn btn-ghost btn-sm" onClick={doExport}>Export backup</button>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={downloadBackup}>Export backup</button>
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => fileRef.current?.click()}>Import backup</button>
           <button type="button" className="btn btn-ghost btn-sm danger" onClick={() => { if (window.confirm('Erase all games, cards and progress? This cannot be undone.')) resetAll(); }}>Reset everything</button>
           <input ref={fileRef} type="file" accept="application/json" hidden onChange={(e) => e.target.files?.[0] && doImport(e.target.files[0])} />

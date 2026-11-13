@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Board from '../components/Board.jsx';
 import { MoveList, EvalBar, PlayerStrip } from '../components/ui.jsx';
 import { useStore } from '../lib/store.js';
@@ -52,6 +52,12 @@ function LastGame({ game }) {
   );
 }
 
+/** "12 moves played", from a count of half-moves. */
+function movesPlayed(plies) {
+  const n = Math.ceil(plies / 2);
+  return `${n} move${n === 1 ? '' : 's'} played`;
+}
+
 export default function PlayView({ visible = true }) {
   const [s, c] = useGame();
   const showEval = useStore((st) => st.settings.showEval);
@@ -60,9 +66,12 @@ export default function PlayView({ visible = true }) {
   const lastGame = useStore((st) => st.games[0]);
   // Leaving a finished game (e.g. to review it) puts it away: coming back shows the setup screen.
   useEffect(() => { if (!visible && s.status === 'over') c.dismiss(); }, [visible, s.status, c]);
-  const [dismissed, setDismissed] = useState(false);
-  const [saved] = useState(() => c.resumable());
-  const resumable = dismissed ? null : saved;
+  // A game left unfinished by a reload. Looked up again whenever the board goes idle, so a
+  // game that has since been resumed and finished isn't offered a second time.
+  const [discards, setDiscards] = useState(0);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const resumable = useMemo(() => (s.status === 'idle' ? c.resumable() : null), [s.status, c, discards]);
+  const inProgress = setup && s.status === 'playing';
 
   if (s.status === 'idle' || setup) {
     return (
@@ -75,11 +84,22 @@ export default function PlayView({ visible = true }) {
           <div className="card resume">
             <div>
               <div className="lesson-kicker">Unfinished game</div>
-              <p>vs {resumable.personaName} · {resumable.moves} moves played</p>
+              <p>vs {resumable.personaName} · {movesPlayed(resumable.moves)}</p>
             </div>
             <div className="callout-actions">
               <button type="button" className="btn btn-primary btn-sm" onClick={() => c.resume()}>Resume</button>
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => { c.discardLive(); setDismissed(true); }}>Discard</button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => { c.discardLive(); setDiscards((n) => n + 1); }}>Discard</button>
+            </div>
+          </div>
+        )}
+        {inProgress && (
+          <div className="card resume">
+            <div>
+              <div className="lesson-kicker">Game in progress</div>
+              <p>vs {s.persona.name} · {movesPlayed(s.plies.length)}. Starting a new game ends it.</p>
+            </div>
+            <div className="callout-actions">
+              <button type="button" className="btn btn-primary btn-sm" onClick={() => setSetup(false)}>Back to the game</button>
             </div>
           </div>
         )}
@@ -124,7 +144,7 @@ export default function PlayView({ visible = true }) {
           {s.status === 'playing'
             ? <button type="button" className="btn btn-ghost btn-sm" onClick={() => { if (window.confirm('Resign this game?')) c.resign(); }}>⚑ Resign</button>
             : null}
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => { c.stop(); setSetup(true); }}>＋ New game</button>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setSetup(true)}>＋ New game</button>
         </div>
       </div>
 

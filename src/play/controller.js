@@ -193,6 +193,7 @@ export class GameController {
     }
     const persona = resolvePersona(g.config.personaId, g.config.custom);
     const userColor = g.userColor || 'w';
+    this.setHeaders(userColor, persona);
     const last = g.plies[g.plies.length - 1];
     this.set({
       ...initialState(), status: 'playing', config: g.config, persona, userColor, gameId: g.gameId,
@@ -230,9 +231,7 @@ export class GameController {
     this.threatsAsked = new Set();
     const userColor = config.userColor === 'random' ? (this.rng() < 0.5 ? 'w' : 'b') : config.userColor === 'black' || config.userColor === 'b' ? 'b' : 'w';
     const persona = resolvePersona(config.personaId, config.custom);
-    this.chess.setHeader('White', userColor === 'w' ? 'You' : persona.name);
-    this.chess.setHeader('Black', userColor === 'b' ? 'You' : persona.name);
-    this.chess.setHeader('Date', new Date().toISOString().slice(0, 10).replace(/-/g, '.'));
+    this.setHeaders(userColor, persona);
     this.set({
       ...initialState(), status: 'playing', config: { ...config }, persona, userColor,
       gameId: `g${Date.now().toString(36)}`, fen: this.chess.fen(),
@@ -245,6 +244,12 @@ export class GameController {
         : 'Coach mode: play your game. I won’t announce tactics — spotting them is the skill — but I’ll stop you after mistakes and missed chances.';
     this.feed({ tone: 'info', title: `vs ${persona.name}`, text: coachIntro, keep: true });
     if (this.chess.turn() === userColor) this.userTurn(); else this.oppTurn();
+  }
+
+  setHeaders(userColor, persona) {
+    this.chess.setHeader('White', userColor === 'w' ? 'You' : persona.name);
+    this.chess.setHeader('Black', userColor === 'b' ? 'You' : persona.name);
+    this.chess.setHeader('Date', store.dayKey().replace(/-/g, '.'));
   }
 
   /** Put a finished game away so the Play tab shows the setup screen again. */
@@ -307,21 +312,27 @@ export class GameController {
     this.gen++;
     this.engine.cancel();
     const { plies, userColor, persona, config, gameId } = this.s;
-    const userPlies = plies.filter((p) => p.by === 'user' && typeof p.loss === 'number' && !p.drill);
-    const accuracy = gameAccuracy(userPlies.map((p) => p.loss));
+    // The game is judged on what you played first: a move you found on a second try, or were
+    // shown, still counts as the mistake it replaced.
+    const own = (p) => p.first || p;
+    const userPlies = plies.filter((p) => p.by === 'user' && typeof own(p).loss === 'number' && !p.drill);
+    const accuracy = gameAccuracy(userPlies.map((p) => own(p).loss));
     const counts = {};
-    for (const p of userPlies) counts[p.grade] = (counts[p.grade] || 0) + 1;
+    for (const p of userPlies) counts[own(p).grade] = (counts[own(p).grade] || 0) + 1;
     const moments = plies
       .map((p, i) => ({ ...p, i }))
-      .filter((p) => p.by === 'user' && (p.intervention || p.found || ['mistake', 'blunder'].includes(p.grade)))
-      .map((p) => ({ ply: p.i, san: p.san, grade: p.grade, kind: p.intervention || (p.found ? 'found' : p.grade), why: p.why || '', best: p.best?.san || null, cardId: p.cardId || null }));
+      .filter((p) => p.by === 'user' && (p.intervention || p.first || p.found || ['mistake', 'blunder'].includes(p.grade)))
+      .map((p) => ({ ply: p.i, san: own(p).san, grade: own(p).grade, kind: p.intervention || p.first?.kind || (p.found ? 'found' : p.grade), why: own(p).why || '', best: p.best?.san || null, cardId: p.cardId || null }));
     const outcome = result.winner === null ? 'draw' : result.winner === userColor ? 'win' : 'loss';
     this.chess.setHeader('Result', result.winner === 'w' ? '1-0' : result.winner === 'b' ? '0-1' : '1/2-1/2');
     const summary = { accuracy, counts, moments, outcome, reason: result.reason, cards: plies.filter((p) => p.cardId).length };
     store.saveGame({
       id: gameId, date: Date.now(), persona: persona.name, personaId: persona.id, elo: config.elo, userColor,
       result: outcome, reason: result.reason, accuracy, counts, opening: this.s.opening?.name || null, pgn: this.chess.pgn(),
-      plies: plies.map((p) => ({ san: p.san, uci: p.uci, by: p.by, fenBefore: p.fenBefore, grade: p.grade || null, loss: p.loss ?? null, best: p.best?.san || null, bestUci: p.best?.uci || null, why: p.why || null, scoreAfter: p.scoreAfter || null })),
+      plies: plies.map((p) => ({
+        san: p.san, uci: p.uci, by: p.by, fenBefore: p.fenBefore, grade: p.grade || null, loss: p.loss ?? null, best: p.best?.san || null, bestUci: p.best?.uci || null, why: p.why || null, scoreAfter: p.scoreAfter || null,
+        ...(p.first ? { first: p.first } : {}), ...(p.revealed ? { revealed: true } : {}),
+      })),
       moments,
     });
     const title = outcome === 'win' ? 'You won' : outcome === 'loss' ? 'You lost' : 'Draw';
@@ -699,8 +710,16 @@ export class GameController {
       return;
     }
     if (a?.kind !== 'intervention' || a.mode !== 'decide') return;
+    const first = this.firstTry(a);
     this.unplay(a.plyIdx);
-    this.set({ active: { ...a, mode: 'retry', attempts: a.attempts + 1 } });
+    this.set({ active: { ...a, first, mode: 'retry', attempts: a.attempts + 1 } });
+  }
+
+  /** What you played first in the position under discussion — kept when the move is replaced. */
+  firstTry(a) {
+    if (a.first) return a.first;
+    const p = this.s.plies[a.plyIdx];
+    return p ? { san: p.san, uci: p.uci, grade: p.grade || null, loss: p.loss ?? null, why: p.why || null, kind: a.reason } : null;
   }
 
   /** Your second try goes on the board like any other move, and then it's checked. */
@@ -708,7 +727,7 @@ export class GameController {
     const a = this.s.active;
     const t = this.t;
     this.t.moved = true;
-    const plyIdx = this.applyMove(uci, 'user', { retried: true, thinkMs: 0 });
+    const plyIdx = this.applyMove(uci, 'user', { retried: true, thinkMs: 0, first: a.first, cardId: a.cardId });
     this.set({ grading: true, arrows: [], marks: {} });
     const ev = await this.evalMove(t, uci);
     if (t.gen !== this.gen) return;
@@ -779,6 +798,7 @@ export class GameController {
     }
     if (a?.kind !== 'intervention') return;
     const t = this.t;
+    const first = a.mode === 'decide' ? this.firstTry(a) : a.first;
     if (a.mode === 'decide') this.unplay(a.plyIdx);
     if (a.cardId && a.reason !== 'repertoire') store.reviewCard(a.cardId, Rating.Again, Date.now() + 1);
     const res = t.result || (await t.analysis);
@@ -787,7 +807,7 @@ export class GameController {
     if (t.gen !== this.gen) return;
     const pv = a.reason === 'repertoire' ? null : shown?.L.steps.length ? shown.L.steps.map((s) => s.uci) : res.lines[0].pv;
     const uci = a.reason === 'repertoire' ? t.rep.move.uci : pv[0];
-    const plyIdx = this.applyMove(uci, 'user', { revealed: true, thinkMs: 0 });
+    const plyIdx = this.applyMove(uci, 'user', { revealed: true, thinkMs: 0, first, cardId: a.cardId });
     const san = this.s.plies[plyIdx].san;
     const ev = await this.evalMove(t, uci);
     if (t.gen !== this.gen) return;

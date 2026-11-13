@@ -42,6 +42,8 @@ quiz only the moves that are due, so moves are always recalled in context.
 
 **Progress** — accuracy trend, which tactical patterns you find vs miss in real games, threat-spotting rate,
 where your mistakes happen (opening/middlegame/endgame), repertoire mastery, and a full review of every game.
+Accuracy is scored on your *first* try at each move: a move you found on a retry, or were shown, still counts
+as the mistake it replaced.
 
 ## How it works
 
@@ -57,6 +59,8 @@ where your mistakes happen (opening/middlegame/endgame), repertoire mastery, and
 | Persistence (localStorage, export/import, resume an unfinished game) | `src/lib/store.js` |
 
 Everything runs in the browser. Progress is stored locally — use **Progress → Export backup** to move it.
+Browser storage is small (a few MB), so only the latest 40 games keep their move-by-move grades; older games
+keep their result and PGN and can still be replayed.
 The only network call is to the public Lichess puzzle API for pattern practice.
 
 ## Development

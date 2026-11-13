@@ -33,7 +33,8 @@ export default function PatternDrawer({ theme: initialTheme, onClose }) {
     const ctrl = new AbortController();
     fetchPuzzle(theme, difficulty, ctrl.signal)
       .then((p) => setLoaded({ key, puzzle: p }))
-      .catch((e) => { if (!ctrl.signal.aborted) setLoaded({ key, error: e.message || 'Could not reach Lichess.' }); });
+      // A failed request (offline, blocked) surfaces as a TypeError with a browser-specific message.
+      .catch((e) => { if (!ctrl.signal.aborted) setLoaded({ key, error: e instanceof TypeError ? 'Couldn’t reach Lichess — puzzles need an internet connection.' : e.message || 'Couldn’t load a puzzle.' }); });
     return () => ctrl.abort();
   }, [key, theme, difficulty]);
   useEffect(() => {
@@ -83,7 +84,7 @@ export default function PatternDrawer({ theme: initialTheme, onClose }) {
         {!puzzle && !error && <div className="drawer-loading"><span className="thinking"><i /><i /><i /></span> Fetching a real-game puzzle…</div>}
         {puzzle && (
           <PositionTrainer
-            runKey={puzzle.id}
+            runKey={key}
             fen={puzzle.fen}
             orientation={turnOf(puzzle.fen) === 'w' ? 'white' : 'black'}
             solution={puzzle.solution}
