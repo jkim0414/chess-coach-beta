@@ -5,9 +5,9 @@
 //   node audit/check.mjs            → audit/out/report.json + a printed summary
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { Chess } from 'chess.js';
-import { boardOf, attackersOf, see } from '../src/lib/tactics.js';
-import { nullMoveFen, playLine } from '../src/lib/chessutil.js';
-import { explainThreat, naiveRecapture } from '../src/lib/explain.js';
+import { boardOf, attackersOf, see, between } from '../src/lib/tactics.js';
+import { nullMoveFen, playLine, materialBalance, turnOf } from '../src/lib/chessutil.js';
+import { explainThreat, naiveRecapture, settle } from '../src/lib/explain.js';
 
 const files = readdirSync('audit/out').filter((f) => /^shard-\d+\.json$/.test(f));
 const records = files.flatMap((f) => JSON.parse(readFileSync(`audit/out/${f}`, 'utf8')));
@@ -212,6 +212,69 @@ function gradeConsistency(r) {
   if (/Inaccuracy|Mistake|Blunder/.test(r.title || '') && /Mistake|Blunder/.test(r.title) && r.tone === 'inaccuracy') flag('grade: title and tone disagree', r, r.title);
 }
 
+// ── claims that are "true" clause by clause but tell the wrong story ───────────
+const WORTH = { pawn: 1, knight: 3, bishop: 3, rook: 5, queen: 9 };
+const HOW_MANY = { a: 1, the: 1, your: 1, two: 2, three: 3, four: 4, five: 5 };
+/** "a bishop and two pawns" → 5 */
+function listValue(text) {
+  let v = 0;
+  for (const m of text.matchAll(/\b(a|the|your|two|three|four|five) (pawn|knight|bishop|rook|queen)s?\b/g)) v += HOW_MANY[m[1]] * WORTH[m[2]];
+  return v;
+}
+
+function storyClaims(r, positions) {
+  const t = textOf(r);
+  if (!t) return;
+  // Reported: "What happens next: 33...Rc1#: you’ve won a pawn" — a mate summed up as material.
+  if (/#[:,] |# — (?!checkmate)|#\S* ‖ [^‖]*(?:comfortable position|you’ve (?:won|lost|given))/.test(t) && r.type !== 'plan') {
+    if (/#: |#[^‖]*‖[^‖]*(?:comfortable position|you’ve (?:won|lost|given)|material is level)/.test(t)) flag('story: a line ending in mate is summed up as material or position', r, t.match(/\S*#[^‖]{0,60}/)?.[0]);
+  }
+  // Reported: "the king on f7 can take it, and taking back only wins a king".
+  if (/wins a king|king on [a-h][1-8] can take it, and taking back|by the king on [a-h][1-8] — defending it/.test(t)) flag('story: the king treated as a cheaper attacker', r, t.match(/[^.]*king[^.]*\./)?.[0]);
+  // Reported: "you’ve given a bishop and a pawn for a rook" — a trade you came out ahead on.
+  for (const m of t.matchAll(/you’ve given ([^.:;—‖]+?) for ([^.:;—‖,]+)/g)) {
+    if (listValue(m[1]) && listValue(m[1]) < listValue(m[2])) flag('story: a favourable trade worded as a loss', r, m[0]);
+  }
+  for (const m of t.matchAll(/you’ve won ([^.:;—‖]+?) for ([^.:;—‖,]+)/g)) {
+    if (listValue(m[2]) && listValue(m[1]) <= listValue(m[2])) flag('story: an unfavourable trade worded as a win', r, m[0]);
+  }
+  // Reported: "White threatens Nxd4, taking your pawn on d4, winning a piece" — the piece came
+  // from deep in a what-if line. A pawn capture can only "win" more with a tactic that is named.
+  const big = t.match(/threatens [^.‖]*?taking your pawn on [a-h][1-8][^.‖]*?winning (a piece|a knight|a bishop|a rook|the exchange|a rook’s worth of material|about a queen’s worth of material)/);
+  if (big && !/fork|pinning|skewer|uncovering|discovered|and then/.test(big[0])) flag('story: a pawn capture said to win a piece with no tactic named', r, big[0]);
+  // Reported: "skewers the queen: once it moves, the pawn on b6 falls" — the pawn was defended.
+  for (const m of t.matchAll(/(\S+) skewers the \w+: once it moves, the \w+ on ([a-h][1-8]) falls/g)) {
+    const san = m[1].replace(/^\d+\.(?:\.\.)?|^…/, '');
+    const real = positions.some((f) => {
+      const [st] = (() => { try { const g = new Chess(f); const mv = g.move(san, { strict: false }); return mv ? [{ to: mv.to, color: mv.color, fenAfter: g.fen() }] : []; } catch { return []; } })();
+      if (!st) return false;
+      const B = boardOf(st.fenAfter);
+      const front = between(st.to, m[2]).find((q) => B.has(q));
+      if (!front) return false;
+      B.delete(front);
+      return (see(B, m[2], st.color, st.to) ?? 0) > 0;
+    });
+    if (!real) flag('story: a skewer whose back piece cannot actually be won', r, m[0]);
+  }
+  // Reported: "It doesn’t lose material…" for 6.Nxd5, which loses a knight for a pawn.
+  if (/doesn’t lose material/.test(t)) {
+    const lines = [];
+    if (r.type === 'mistake' && r.movePv) lines.push([r.fen, r.movePv, r.bestPv]);
+    const p = r.type === 'callout' && [...(r.ctx?.last || [])].reverse().find((x) => x.by === 'user' && x.movePv);
+    if (p) lines.push([p.fenBefore, p.movePv, p.bestPv]);
+    for (const [fen, pv, bestPv] of lines) {
+      const at = (line) => { const { U, end } = settle(fen, line); return U.steps.length ? U.mats[Math.max(0, end)] : 0; };
+      const mine = at(pv), best = bestPv?.length ? at(bestPv) : 0;
+      if (mine <= -1 && mine < best) flag('story: "doesn’t lose material" but the line does', r, `settles at ${mine} (best line ${best})`);
+    }
+  }
+  // Reported: "It pays off a few moves later … you’ve won a piece in all" at an evaluation of +0.1.
+  if (r.type === 'plan' && r.score?.type === 'cp' && r.score.value < 60 && materialBalance(r.fen, turnOf(r.fen)) >= 0
+    && /(?:wins|you’ve won) (?:a piece|a rook’s worth|about a queen’s worth|the (?:knight|bishop|rook|queen) on [a-h][1-8])(?! for)/.test(r.text || '')) {
+    flag('story: a plan claims to win a piece but the engine calls the game level', r, `score ${r.score.value}`);
+  }
+}
+
 const counts = {};
 // A callout or note can refer back to a move just taken back, so recent records' positions count too.
 const recent = {};
@@ -232,6 +295,7 @@ for (const r of records) {
   mistakeClaims(r);
   gradeConsistency(r);
   threatAudience(r);
+  storyClaims(r, positions);
 }
 
 const byCheck = {};

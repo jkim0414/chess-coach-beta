@@ -166,7 +166,7 @@ function ctxOf(s, t) {
   const turn = t ? {
     fen: t.fen,
     lines: t.result?.lines?.slice(0, 3).map((l) => l.pv) || [],
-    planPv: ucis(t.plan?.steps), planThreatPv: ucis(t.plan?.threat?.steps),
+    planPv: ucis(t.plan?.L?.steps), planThreatPv: ucis(t.plan?.threat?.steps),
     threatPv: ucis(t.threat?.L?.steps), oppThreatPv: ucis(t.plan?.oppThreat?.L?.steps),
   } : null;
   return { fen: s.fen, userColor: s.userColor, last, turn };
@@ -196,9 +196,7 @@ async function probeTurn(probe, t, gameId, s, rec, rng) {
   const lines = t.result.lines;
   const best = lines[0];
   try {
-    const plan = await planOf(probe, fen, best.pv, { opponentThreat: true });
-    plan.win = winOf(best.score);
-    plan.score = best.score;
+    const plan = await planOf(probe, fen, best.pv, { opponentThreat: true, score: best.score });
     rec({
       type: 'plan', gameId, ply: s.plies.length, fen, pv: best.pv, score: best.score,
       text: describePlan(plan), hints: planHints(plan).map((h) => ({ text: h.text, marks: h.marks, arrows: h.arrows })),
@@ -217,7 +215,7 @@ async function probeTurn(probe, t, gameId, s, rec, rng) {
       if (!m?.lines[0]) continue;
       const args = { fen, uci, movePv: m.lines[0].pv, winBefore: winOf(best.score), winAfter: winOf(m.lines[0].score), bestPv: best.pv, bestScore: best.score };
       rec({
-        type: 'mistake', gameId, ply: s.plies.length, fen, uci, san: uciToSan(fen, uci), movePv: m.lines[0].pv, score: m.lines[0].score, bestScore: best.score,
+        type: 'mistake', gameId, ply: s.plies.length, fen, uci, san: uciToSan(fen, uci), movePv: m.lines[0].pv, bestPv: best.pv, score: m.lines[0].score, bestScore: best.score,
         lossWin: +(args.winBefore - args.winAfter).toFixed(3),
         why: explainMistake(args).why, refutation: explainMistake(args).refutation,
         consequence: explainConsequence({ fen, movePv: m.lines[0].pv, winAfter: args.winAfter })?.text || null,

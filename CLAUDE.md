@@ -38,6 +38,11 @@ notice and recall things during play over showing answers.
   controller's coaching, and fix what it finds before shipping — James shouldn't be the one catching
   wrong explanations. `node audit/eval.mjs "<fen>"` prints engine lines for checking a message by hand.
   When James reports a bad explanation, add a check to `audit/check.mjs` that would have caught it.
+- **"0 issues" is not a clean bill of health.** The checker only catches what it has a rule for; a
+  message can be true clause by clause and still tell the wrong story ("33...Rc1#: you’ve won a
+  pawn"). After the audit, run `node audit/cards.mjs` and *read* every card the learner was shown,
+  as a chess player would. Material read off a long engine line is the usual culprit: lines cut
+  off mid-exchange, a sacrifice by the other side counted as a win, a promotion.
 - Opening content follows `src/data/courses/SCHEMA.md`; validate with `npm run validate:content:engine`.
 - Browser-test with `npm run build` + `vite preview`: dev-server HMR reloads (and loses the live game)
   whenever files under `src/data` change.

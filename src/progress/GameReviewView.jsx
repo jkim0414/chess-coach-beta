@@ -90,7 +90,7 @@ export default function GameReviewView({ gameId }) {
     const engine = getEngine();
     const res = await engine.analyze(pos, { depth: 18, multipv: 1, movetime: 6000 });
     if (!res?.lines[0]) { setDeep(null); return; }
-    const plan = await planOf(engine, pos, res.lines[0].pv);
+    const plan = await planOf(engine, pos, res.lines[0].pv, { score: res.lines[0].score });
     setDeep({ idx: at, text: describePlan(plan, { userMove: cur?.by === 'user' ? cur.uci : undefined }) });
   }
 

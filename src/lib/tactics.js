@@ -154,6 +154,13 @@ export function linesThrough(B, from) {
   const out = [];
   // A skewer or a relative pin is only real if the attacking piece can't simply be taken.
   const attackerSafe = (see(B, from, opp(me.color)) ?? 0) <= 0;
+  // …and a skewer only if what stands behind can be won once the front piece steps aside
+  // (a defended pawn behind a queen isn't one).
+  const winsBehind = (front, behind) => {
+    const b = new Map(B);
+    b.delete(front);
+    return (see(b, behind, me.color, from) ?? 0) > 0;
+  };
   for (const [df, dr] of dirsFor(me.type)) {
     let cf = f + df, cr = r + dr;
     let first = null;
@@ -172,7 +179,7 @@ export function linesThrough(B, from) {
             else if (p.type === 'k' && first.piece.type !== 'k') out.push({ type: 'pin', absolute: true, pinned: first, behind: second });
             else if (!attackerSafe && first.piece.type !== 'k') { /* the front piece can just take the attacker */ }
             else if (first.piece.type === 'k' || SEE_VAL[first.piece.type] > SEE_VAL[p.type]) {
-              if (first.piece.type === 'k' || (see(B, first.square, me.color, from) ?? 0) > 0 || SEE_VAL[first.piece.type] > SEE_VAL[me.type])
+              if ((first.piece.type === 'k' || (see(B, first.square, me.color, from) ?? 0) > 0 || SEE_VAL[first.piece.type] > SEE_VAL[me.type]) && winsBehind(first.square, s))
                 out.push({ type: 'skewer', front: first, behind: second });
             } else if (SEE_VAL[p.type] > SEE_VAL[first.piece.type] && SEE_VAL[p.type] > SEE_VAL[me.type]) {
               out.push({ type: 'pin', absolute: false, pinned: first, behind: second });
@@ -315,7 +322,13 @@ export function analyzeLine(fen, pv, maxPlies = 12) {
   const cashed = (m, i) => {
     const ts = targetsOf(m);
     if (!ts) return true;
-    return steps.slice(i, keyIdx + 1).some((s) => s.color === side && s.captured && ts.includes(s.to));
+    // A target that runs — or lashes out and is taken where it lands — is still the target.
+    const live = new Set(ts);
+    for (const s of steps.slice(i, keyIdx + 1)) {
+      if (s.color === side) { if (s.captured && live.has(s.to)) return true; }
+      else if (live.has(s.from)) { live.delete(s.from); live.add(s.to); }
+    }
+    return false;
   };
   let motif = null;
   for (let i = 0; i <= Math.min(keyIdx, 4) && !motif; i += 2) {
@@ -331,7 +344,7 @@ export function analyzeLine(fen, pv, maxPlies = 12) {
   if (!motif && gain >= 1) motif = { type: 'material', ply: 0 };
   if (!motif && steps[0] && motifsOfMove(steps[0].fenBefore, steps[0].uci).some((m) => m.type === 'check')) motif = { type: 'check', ply: 0 };
 
-  return { side, steps, gain, mateIdx, keyIdx, motif, mats, stables };
+  return { side, steps, gain, mateIdx, matedIdx, keyIdx, motif, mats, stables };
 }
 
 function isBackRankMate(step) {

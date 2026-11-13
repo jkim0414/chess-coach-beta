@@ -118,6 +118,9 @@ function practise(motif) {
   return theme ? [{ label: `Practise ${themeName(theme).toLowerCase()}`, action: 'pattern', theme }] : undefined;
 }
 
+// Explanations that already follow the punishing line move by move: don't print it twice.
+const WALKS_THE_LINE = ['positional', 'material'];
+
 const MOMENT_TEXT = {
   tactic: { title: 'There’s a tactic here', text: 'Something wins material by force. Take your time — checks, captures, threats.' },
   mate: { title: 'You have a forced mate', text: 'Look at every check. One sequence leaves the king no escape.' },
@@ -593,7 +596,7 @@ export class GameController {
       const entry = this.feed({
         tone: 'inaccuracy', title: `${ply.san}?! Inaccuracy`,
         text,
-        revealLabel: `What does ${best.san} do?`, reveal: describePlan(planSync(fenBefore, lines[0].pv), { userMove: ply.uci }),
+        revealLabel: `What does ${best.san} do?`, reveal: describePlan(planSync(fenBefore, lines[0].pv, lines[0].score), { userMove: ply.uci }),
       });
       this.planFor(t).then((plan) => { if (plan) this.updateFeed(entry.id, { reveal: describePlan(plan, { userMove: ply.uci }) }); });
     }
@@ -611,7 +614,7 @@ export class GameController {
     const more = (L.mateIdx >= 0 ? L.mateIdx : L.keyIdx) >= 2;
     const title = m.type === 'defend' ? 'You found the only move' : m.type === 'mate' ? 'You found the mating attack' : `You found it${motifName ? ` — ${motifName.toLowerCase()}` : ''}`;
     this.feed({
-      tone: 'best', title, text: more ? 'Now finish the job — play the combination through.' : describePlan(planSync(t.fen, ev.line.pv)),
+      tone: 'best', title, text: more ? 'Now finish the job — play the combination through.' : describePlan(planSync(t.fen, ev.line.pv, ev.line.score)),
       actions: m.type !== 'defend' ? practise(m.motif) : undefined,
     });
     if (more && m.type !== 'defend') this.startDrill(t, L);
@@ -625,7 +628,7 @@ export class GameController {
     // "What happens next" follows the line until the material settles, so a piece you can win
     // straight back doesn't read like a piece lost.
     const cons = explainConsequence({ fen: t.fen, movePv: ev.line.pv, winAfter: ev.winMove });
-    if (cons && ex.kind !== 'positional') ex.refutation = cons.summary; // positional notes already walk the line
+    if (cons && !WALKS_THE_LINE.includes(ex.kind)) ex.refutation = cons.summary;
     const T = COLOR_NAME[opp(this.s.userColor)];
     const alsoBad = (ev.grade === 'mistake' || ev.grade === 'blunder') && ex.kind !== 'missed-win'; // "missed a win" is already the title
     const lower = (x) => (x ? x[0].toLowerCase() + x.slice(1) : x);
@@ -681,7 +684,7 @@ export class GameController {
       orientation: this.s.userColor === 'w' ? 'white' : 'black',
       lastMove: prevOpp ? { from: prevOpp.uci.slice(0, 2), to: prevOpp.uci.slice(2, 4) } : null,
       prompt: type === 'tactic' ? (t.moment?.type === 'mate' ? 'Find the forced mate.' : t.moment?.type === 'defend' ? 'Find the only move that holds.' : 'Find the winning continuation.') : 'Find a good move — you went wrong here before.',
-      explanation: describePlan(planSync(t.fen, lines[0].pv)),
+      explanation: describePlan(planSync(t.fen, lines[0].pv, lines[0].score)),
       source: { gameId: this.s.gameId, ply: plyIdx, opponent: this.s.persona.name, date: Date.now(), played: ply.san, why: ex?.why || null },
     });
     store.reviewCard(id, firstRating);
@@ -741,7 +744,7 @@ export class GameController {
     const san = this.s.plies[plyIdx].san;
     const rating = a.hintLevel >= 2 || a.attempts > 2 ? Rating.Again : Rating.Hard;
     if (a.cardId) store.reviewCard(a.cardId, rating, Date.now() + 1);
-    const explain = a.reason === 'repertoire' ? (t.rep.move.note || '') : ev?.line ? describePlan(planSync(t.fen, ev.line.pv)) : '';
+    const explain = a.reason === 'repertoire' ? (t.rep.move.note || '') : ev?.line ? describePlan(planSync(t.fen, ev.line.pv, ev.line.score)) : '';
     // When several moves were fine, say so: the lesson is the problem they all solve, not one magic move.
     const lines = t.result?.lines || [];
     const others = a.reason === 'repertoire' || !lines.length ? [] : lines
@@ -755,7 +758,7 @@ export class GameController {
     const entry = this.feed({ tone: 'best', title: `${san} — that’s it`, text: drill ? 'That’s the first move — now finish the combination.' : explain + also, actions: a.reason === 'missed' ? practise(a.motif) : undefined });
     if (drill) { this.startDrill(t, L); return; }
     if (a.reason !== 'repertoire' && ev?.line) {
-      planOf(this.engine, t.fen, ev.line.pv, { opponentThreat: true }).then((plan) => {
+      planOf(this.engine, t.fen, ev.line.pv, { opponentThreat: true, score: ev.line.score }).then((plan) => {
         if (plan) this.updateFeed(entry.id, { text: describePlan(plan) + also });
       });
     }
@@ -773,7 +776,7 @@ export class GameController {
       const ex = explainMistake({ fen: t.fen, uci, movePv: ev.line.pv, winBefore: ev.winBest, winAfter: ev.winMove, bestPv: ev.lines[0]?.pv, bestScore: ev.lines[0]?.score });
       const cons = explainConsequence({ fen: t.fen, movePv: ev.line.pv, winAfter: ev.winMove });
       why = ex.why;
-      refutation = cons && ex.kind !== 'positional' ? cons.summary : ex.refutation;
+      refutation = cons && !WALKS_THE_LINE.includes(ex.kind) ? cons.summary : ex.refutation;
     }
     if (a.reason === 'repertoire') why = `Your ${a.course} repertoire plays something else here.${bad ? ` ${why}` : ''}`;
     const g = GRADES[ev.grade];
@@ -815,7 +818,7 @@ export class GameController {
     this.set({ active: null, arrows: [] });
     const plan = a.reason === 'repertoire' ? null : await this.planFor(t);
     if (t.gen !== this.gen) return;
-    const text = a.reason === 'repertoire' ? (t.rep.move.note || 'Your repertoire move.') : describePlan(plan || planSync(t.fen, pv));
+    const text = a.reason === 'repertoire' ? (t.rep.move.note || 'Your repertoire move.') : describePlan(plan || planSync(t.fen, pv, res.lines[0].score));
     this.feed({ tone: 'tactic', title: `The move was ${san}`, text, actions: a.reason === 'missed' ? practise(a.motif) : undefined });
     if (a.reason === 'missed' && pv) {
       const L = analyzeLine(t.fen, pv, 12);

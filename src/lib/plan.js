@@ -4,6 +4,7 @@
 import { analyzeLine, boardOf, attackersOf, pinnedBy, motifsOfMove, see } from './tactics.js';
 import { Chess } from 'chess.js';
 import { nullMoveFen, formatLine, NAMES, COLOR_NAME, opp, playLine, lineText, materialBalance } from './chessutil.js';
+import { winOf } from './evaluation.js';
 import { describeMotif, describeQuietMove, winningsPhrase, capitalize, explainThreat, MOTIFS, prose, motifTail } from './explain.js';
 
 const pn = (t) => NAMES[t];
@@ -16,9 +17,9 @@ const SHOWN_MOTIFS = ['fork', 'pin', 'skewer', 'discovered', 'discovered-check',
  * first move threatens (a null-move search: "what if they ignored it?") and, optionally,
  * what the opponent threatens right now.
  */
-export async function planOf(engine, fen, pv, { opponentThreat = false } = {}) {
-  const L = analyzeLine(fen, pv, 12);
-  const plan = { fen, L, threat: null, oppThreat: null };
+export async function planOf(engine, fen, pv, { opponentThreat = false, score = null } = {}) {
+  const plan = planSync(fen, pv, score);
+  const L = plan.L;
   const s0 = L.steps[0];
   if (!engine || !s0) return plan;
   // What does the move threaten? Not asked for captures: the natural reply is to take back.
@@ -26,7 +27,9 @@ export async function planOf(engine, fen, pv, { opponentThreat = false } = {}) {
     const nf = nullMoveFen(s0.fenAfter);
     const res = nf ? await engine.analyze(nf, { depth: 10, movetime: 800 }) : null;
     if (res?.lines[0]) {
-      const T = analyzeLine(nf, res.lines[0].pv, 8);
+      // Like the opponent's threats: a mate can run deep, anything else is what it wins right away.
+      const deep = analyzeLine(nf, res.lines[0].pv, 8);
+      const T = deep.mateIdx >= 0 ? deep : analyzeLine(nf, res.lines[0].pv, 4);
       // Only direct threats (a capture or mate next move) — "threatens Rg3, then…" teaches nothing —
       // and only ones the move itself creates: a capture that was already on before isn't its threat.
       if ((T.mateIdx >= 0 || (T.gain >= 1 && T.steps[0]?.captured)) && createdBy(fen, T)) plan.threat = T;
@@ -63,8 +66,24 @@ function threatPersists(fenAfter, tm) {
   return (see(boardOf(fenAfter), tm.to, r.color, tm.from) ?? 0) > 0;
 }
 
-/** Synchronous plan without engine extras (no threat search). */
-export const planSync = (fen, pv) => ({ fen, L: analyzeLine(fen, pv, 12), threat: null, oppThreat: null });
+/**
+ * Synchronous plan without engine extras (no threat search). `score` is the engine's score
+ * for the line (side to move's view): it keeps the explanation honest about who is better.
+ */
+export const planSync = (fen, pv, score = null) => ({
+  fen, L: analyzeLine(fen, pv, 12), threat: null, oppThreat: null,
+  ...(score ? { score, win: winOf(score) } : {}),
+});
+
+/**
+ * The material a line really wins. Material the engine doesn't think leaves you better off
+ * (you'd be two pawns up, yet it calls the game level) is paid for elsewhere — not a prize.
+ */
+function realGain(plan) {
+  const { L, fen } = plan;
+  if (plan.win === undefined || L.mateIdx >= 0 || L.gain < 2) return L.gain;
+  return materialBalance(fen, L.side) + L.gain >= 2 && plan.win < 0.55 ? 0 : L.gain;
+}
 
 /** Why capturing on step `idx` works: defenders that left or were removed, pins, and the count. */
 function captureReasons(fen, L, idx) {
@@ -149,6 +168,7 @@ export function describePlan(plan, { userMove } = {}) {
   // What a capture achieves depends on where material stands now: in the middle of a trade,
   // taking back is "winning the material back", not winning.
   const bal0 = materialBalance(fen, L.side);
+  const gain = realGain(plan);
   const wins = (S, idx) => {
     if (S.promotion && !S.captured) return 'queens the pawn';
     const bal1 = bal0 + L.gain;
@@ -163,7 +183,7 @@ export function describePlan(plan, { userMove } = {}) {
 
   // (Pinning a pawn is rarely the point — the threat behind it is.)
   const m0 = motifsOfMove(fen, s0.uci).find((m) => SHOWN_MOTIFS.includes(m.type) && !(m.type === 'pin' && m.pinned.piece.type === 'p'));
-  const capWins = s0.captured && L.gain >= 1 && L.keyIdx === 0;
+  const capWins = s0.captured && gain >= 1 && L.keyIdx === 0;
   let quiet = null;
   if (m0 && capWins && motifTail(m0)) out.push(`${first} ${wins(s0, 0)}, ${motifTail(m0)}.`);
   else if (m0) out.push(`${capitalize(describeMotif(m0, steps, first))}.`);
@@ -178,7 +198,7 @@ export function describePlan(plan, { userMove } = {}) {
     // A good move here has to stop the mate; only say so if we're not lost anyway.
     const tm = plan.oppThreat.move;
     if (plan.win === undefined || plan.win > 0.1) out.push(`It also stops ${Them}’s mating attack (which starts ${tm.color ? prose(tm.color, tm.san) : tm.san}).`);
-  } else if (plan.oppThreat && !m0 && L.gain < 1 && !(quiet && (quiet.includes(`on ${plan.oppThreat.move?.to}`) || (quiet.includes('out of danger') && plan.oppThreat.move?.to === s0.from)))) {
+  } else if (plan.oppThreat && !m0 && gain < 1 && !(quiet && (quiet.includes(`on ${plan.oppThreat.move?.to}`) || (quiet.includes('out of danger') && plan.oppThreat.move?.to === s0.from)))) {
     const tm = plan.oppThreat.move;
     if (!threatPersists(s0.fenAfter, tm)) {
       out.push(`It also deals with ${Them}’s threat of ${tm.color ? prose(tm.color, tm.san) : tm.san}.`);
@@ -189,18 +209,18 @@ export function describePlan(plan, { userMove } = {}) {
   }
 
   const r1 = steps[1];
-  if (L.gain >= 1 && L.keyIdx === 2) {
+  if (gain >= 1 && L.keyIdx === 2) {
     const S = steps[2];
     const why = captureReasons(fen, L, 2);
     out.push(why.caused
       ? `${Them}’s best answer is ${num(r1)} — but ${why.join(', and ')}, so ${num(S)} ${wins(S, 2)}.`
       : `${Them}’s best answer is ${num(r1)}, and then ${num(S)} ${wins(S, 2)}${why.length ? ` (${why.join(', and ')})` : ''}.`);
-  } else if (L.gain >= 1 && L.keyIdx === 4) {
+  } else if (gain >= 1 && L.keyIdx === 4) {
     const why = captureReasons(fen, L, 4);
     out.push(`${Them}’s best answer is ${num(r1)}; then after ${lineText(steps.slice(2, 4))}, ${num(steps[4])} ${wins(steps[4], 4)}${why.length ? ` (${why.join(', and ')})` : ''}.`);
   } else if (threat && r1) {
     out.push(`${Them}’s best answer is ${num(r1)}.`);
-  } else if (L.gain >= 1 && L.keyIdx > 4 && L.keyIdx <= 8 && !m0 && !capWins) {
+  } else if (gain >= 1 && L.keyIdx > 4 && L.keyIdx <= 8 && !m0 && !capWins) {
     // The payoff comes later: show the line up to it rather than stopping short.
     const S = steps[L.keyIdx];
     out.push(`It pays off a few moves later: ${lineText(steps.slice(0, L.keyIdx + 1))} — ${num(S)} ${wins(S, L.keyIdx)}.`);
@@ -210,7 +230,7 @@ export function describePlan(plan, { userMove } = {}) {
 
   if (userMove && userMove !== s0.uci) {
     const [mine] = playLine(fen, [userMove]);
-    const keyPiece = threat?.steps[0]?.from || (L.keyIdx >= 2 ? steps[L.keyIdx].from : null);
+    const keyPiece = threat?.steps[0]?.from || (gain >= 1 && L.keyIdx >= 2 ? steps[L.keyIdx].from : null);
     if (mine && keyPiece && mine.from === keyPiece) {
       out.push(`Your ${num(mine)} ${mine.captured ? 'trades off' : 'moves away'} the ${pn(mine.piece)} that ${threat ? 'makes that threat work' : 'wins the material'}.`);
     }
@@ -248,7 +268,9 @@ function quietGoal(fen, s0, Them) {
   if (/pawn storm/.test(d)) return 'Your pawns can join the attack on the king.';
   if (/fianchettoes/.test(d)) return 'Your bishop wants the long diagonal.';
   if (/activates the king/.test(d)) return 'In the endgame the king is a fighting piece. Use it.';
+  if (/^steps the king/.test(d)) return 'Look at your king. Is it standing on its best square?';
   if (/trades/.test(d)) return 'A trade helps you here. Which pair of pieces should come off?';
+  if (/^takes the /.test(d)) return 'There’s a capture worth making here. What can you take — and what happens if they take back?';
   if ((x = m(/opens the way for your (\w+)/))) return `Your ${x[1]} is hemmed in by one of your own pawns. Free it.`;
   if ((x = m(/supports the (\w+) on ([a-h][1-8])/))) return { text: `Your ${x[1]} on ${x[2]} is being challenged. Can you back it up?`, targets: [x[2]] };
   if (/escape square/.test(d)) return 'Your king could use some breathing room.';
@@ -270,12 +292,13 @@ export function planHints(plan, { motif = null } = {}) {
   const B = boardOf(fen);
   const Them = COLOR_NAME[opp(L.side)];
   const piece = pn(B.get(s0.from).type);
+  const gain = realGain(plan);
 
   let h1, targets = [];
   if (matedAnyway(plan)) h1 = 'There’s no escaping the mating attack. Find the move that holds out longest.';
   else if (L.mateIdx >= 0) h1 = MOTIFS.mate.hint;
   else if (motif && MOTIFS[motif] && !['material', 'check'].includes(motif)) h1 = MOTIFS[motif].hint;
-  else if (oppThreat && L.gain < 1 && !threat) {
+  else if (oppThreat && gain < 1 && !threat) {
     const tm = oppThreat.move;
     const first = tm?.san ? (tm.color ? prose(tm.color, tm.san) : tm.san) : null;
     h1 = oppThreat.mate
@@ -290,7 +313,7 @@ export function planHints(plan, { motif = null } = {}) {
       const pin = pinNote(threat);
       h1 = `${Them}’s ${pn(t0.captured)} on ${t0.to} is weaker than it looks${pin ? ` — its defender on ${pin.defender} is lined up with its king` : ''}. Find a move that threatens it.`;
     } else h1 = 'Find a move that creates a threat your opponent has to answer.';
-  } else if (L.gain >= 1 && L.keyIdx <= 4) {
+  } else if (gain >= 1 && L.keyIdx <= 4) {
     const S = L.steps[L.keyIdx];
     const victim = B.get(S.to);
     if (S.promotion && !S.captured) {
@@ -307,7 +330,7 @@ export function planHints(plan, { motif = null } = {}) {
         ? `Look at ${S.to}: count its attackers and defenders.`
         : `Look at ${S.to}: count its attackers and defenders — and notice what happens when one of the defenders has to move.`;
     }
-  } else if (s0.captured && L.gain >= 1) {
+  } else if (s0.captured && gain >= 1) {
     h1 = captureHint(s0, Them);
     targets = [s0.to];
   } else {
@@ -345,7 +368,7 @@ export function hintProvider(engine, motif = null) {
       cache.set(key, (async () => {
         const res = await engine.analyze(fen, { depth: 14, movetime: 3000, ...(expectedUci ? { searchmoves: [expectedUci] } : {}) });
         if (!res?.lines[0]) return null;
-        return planHints(await planOf(engine, fen, res.lines[0].pv, { opponentThreat: true }), { motif });
+        return planHints(await planOf(engine, fen, res.lines[0].pv, { opponentThreat: true, score: res.lines[0].score }), { motif });
       })());
     }
     return cache.get(key);
